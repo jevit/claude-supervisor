@@ -1,0 +1,56 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+:root {
+  --bg-primary: #0f1117;
+  --bg-secondary: #1a1d27;
+  --bg-card: #222536;
+  --text-primary: #e4e6f0;
+  --text-secondary: #9ca3af;
+  --accent: #8b5cf6;
+  --accent-hover: #7c3aed;
+  --success: #10b981;
+  --warning: #f59e0b;
+  --error: #ef4444;
+  --border: #2d3148;
+}
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+.app-layout {
+  display: flex;
+  min-height: 100vh;
+}
+
+.main-content {
+  flex: 1;
+  padding: 24px;
+  margin-left: 240px;
+}
+
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+}
+
+.status-badge {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.status-active { background: rgba(16, 185, 129, 0.15); color: var(--success); }
+.status-idle { background: rgba(156, 163, 175, 0.15); color: var(--text-secondary); }
+.status-working { background: rgba(139, 92, 246, 0.15); color: var(--accent); }
+.status-error { background: rgba(239, 68, 68, 0.15); color: var(--error); }
