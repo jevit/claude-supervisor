@@ -7,6 +7,10 @@ import Conflicts from './pages/Conflicts';
 import HealthChecks from './pages/HealthChecks';
 import SharedContext from './pages/SharedContext';
 import Messages from './pages/Messages';
+import Irritants from './pages/Irritants';
+import AlertRules from './pages/AlertRules';
+import Analytics from './pages/Analytics';
+import SupervisorModePage from './pages/SupervisorMode';
 import Sidebar from './components/Sidebar';
 
 export default function App() {
@@ -22,6 +26,10 @@ export default function App() {
           <Route path="/health" element={<HealthChecks />} />
           <Route path="/context" element={<SharedContext />} />
           <Route path="/messages" element={<Messages />} />
+          <Route path="/irritants" element={<Irritants />} />
+          <Route path="/alerts" element={<AlertRules />} />
+          <Route path="/analytics" element={<Analytics />} />
+          <Route path="/supervisor" element={<SupervisorModePage />} />
         </Routes>
       </main>
     </div>

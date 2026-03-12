@@ -32,4 +32,29 @@ router.put('/read-all', (req, res) => {
   res.json({ success: true });
 });
 
+// --- Regles d'alertes configurables ---
+
+// Lister les regles
+router.get('/rules', (req, res) => {
+  const notificationManager = req.app.locals.notificationManager;
+  res.json(notificationManager.getRules());
+});
+
+// Ajouter/modifier une regle
+router.post('/rules', (req, res) => {
+  const notificationManager = req.app.locals.notificationManager;
+  const { event, severity, titleTemplate, messageTemplate } = req.body;
+  if (!event) return res.status(400).json({ error: 'event requis' });
+  const rule = notificationManager.addRule(event, { severity, titleTemplate, messageTemplate });
+  res.json(rule);
+});
+
+// Supprimer une regle
+router.delete('/rules/:event', (req, res) => {
+  const notificationManager = req.app.locals.notificationManager;
+  const success = notificationManager.removeRule(decodeURIComponent(req.params.event));
+  if (!success) return res.status(404).json({ error: 'Regle non trouvee' });
+  res.json({ success: true });
+});
+
 module.exports = router;

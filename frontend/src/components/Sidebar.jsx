@@ -10,6 +10,10 @@ const NAV_ITEMS = [
   { to: '/health', label: 'Health Checks' },
   { to: '/context', label: 'Contexte Partage' },
   { to: '/messages', label: 'Messages' },
+  { to: '/irritants', label: 'Irritants' },
+  { to: '/alerts', label: 'Regles d\'Alertes' },
+  { to: '/analytics', label: 'Analytics' },
+  { to: '/supervisor', label: 'Mode Superviseur' },
 ];
 
 export default function Sidebar() {

@@ -86,22 +86,39 @@ class TerminalTracker {
   }
 
   /**
-   * Marque les sessions inactives depuis trop longtemps comme stale.
+   * Marque les sessions inactives depuis trop longtemps comme stale,
+   * puis purge les sessions stale apres purgeAge.
    * Appeler periodiquement (ex: toutes les 60s).
+   *
+   * @param {number} maxAge - Delai avant passage en stale (defaut: 2min)
+   * @param {number} purgeAge - Delai avant suppression des sessions stale (defaut: 10min)
    */
-  cleanupStale(maxAge = 120000) {
+  cleanupStale(maxAge = 120000, purgeAge = 600000) {
     const now = Date.now();
     let changed = false;
+
+    const toRemove = [];
     for (const session of this.sessions.values()) {
-      if (session.status === 'active') {
-        const lastUpdate = new Date(session.lastUpdate).getTime();
-        if (now - lastUpdate > maxAge) {
-          session.status = 'stale';
-          changed = true;
-          this.broadcast('session:stale', session);
-        }
+      const lastUpdate = new Date(session.lastUpdate).getTime();
+      const age = now - lastUpdate;
+
+      if (session.status === 'active' && age > maxAge) {
+        // Pas de heartbeat depuis maxAge -> stale
+        session.status = 'stale';
+        changed = true;
+        this.broadcast('session:stale', session);
+      } else if (session.status === 'stale' && age > purgeAge) {
+        // Stale depuis trop longtemps -> purge
+        toRemove.push(session.id);
       }
     }
+
+    for (const id of toRemove) {
+      this.sessions.delete(id);
+      changed = true;
+      this.broadcast('session:purged', { id });
+    }
+
     if (changed) this._persist();
   }
 

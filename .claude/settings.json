@@ -12,5 +12,18 @@
   "dashboard": {
     "refreshInterval": 2000,
     "maxSessionHistory": 50
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node hooks/post-tool-reporter.js"
+          }
+        ]
+      }
+    ]
   }
 }

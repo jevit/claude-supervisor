@@ -281,6 +281,45 @@ const TOOLS = [
     description: 'Recupere le statut de sante du superviseur et les resultats des health checks.',
     inputSchema: { type: 'object', properties: {} },
   },
+  {
+    name: 'supervisor_git_enqueue',
+    description: "Ajoute un commit a la file d'attente Git du superviseur pour eviter les conflits entre sessions.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        directory: { type: 'string', description: 'Repertoire du projet git' },
+        message: { type: 'string', description: 'Message de commit' },
+      },
+      required: ['directory', 'message'],
+    },
+  },
+  {
+    name: 'supervisor_git_complete',
+    description: "Signale qu'un commit de la file d'attente a ete effectue.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        entryId: { type: 'string', description: "ID de l'entree dans la file" },
+      },
+      required: ['entryId'],
+    },
+  },
+  {
+    name: 'supervisor_git_queue',
+    description: "Recupere la file d'attente de commits Git.",
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'supervisor_git_branches',
+    description: 'Recupere les branches Git actives dans un repertoire.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        directory: { type: 'string', description: 'Repertoire du projet git' },
+      },
+      required: ['directory'],
+    },
+  },
 ];
 
 // --- Handlers des tools ---
@@ -402,9 +441,54 @@ async function handleToolCall(name, args) {
       return JSON.stringify({ server: health, checks }, null, 2);
     }
 
+    case 'supervisor_git_enqueue': {
+      const entry = await apiCall('POST', '/api/git/queue', {
+        sessionId: SESSION_ID,
+        directory: args.directory,
+        message: args.message,
+      });
+      return `Commit ajoute a la file: ${entry.id} (${args.message})`;
+    }
+
+    case 'supervisor_git_complete': {
+      const entry = await apiCall('PUT', `/api/git/queue/${args.entryId}/complete`);
+      return `Commit ${args.entryId} marque comme complete`;
+    }
+
+    case 'supervisor_git_queue': {
+      const queue = await apiCall('GET', '/api/git/queue');
+      if (!queue || queue.length === 0) return "File d'attente vide.";
+      return JSON.stringify(queue, null, 2);
+    }
+
+    case 'supervisor_git_branches': {
+      const branches = await apiCall('GET', `/api/git/branches?directory=${encodeURIComponent(args.directory)}`);
+      if (!branches || branches.length === 0) return 'Aucune branche trouvee.';
+      return JSON.stringify(branches, null, 2);
+    }
+
     default:
       throw new Error(`Tool inconnu: ${name}`);
   }
+}
+
+// --- Heartbeat periodique ---
+// Envoie un ping toutes les 30s pour maintenir la session "active" dans le dashboard
+let _heartbeatTimer = null;
+function startHeartbeat() {
+  if (_heartbeatTimer) return;
+  _heartbeatTimer = setInterval(async () => {
+    try {
+      await apiCall('PUT', `/api/sessions/${SESSION_ID}/heartbeat`, {
+        directory: SESSION_DIR,
+        timestamp: new Date().toISOString(),
+      });
+    } catch {
+      // Superviseur non accessible, on continue silencieusement
+    }
+  }, 30000);
+  // Ne pas empecher le process de quitter
+  if (_heartbeatTimer.unref) _heartbeatTimer.unref();
 }
 
 // --- Serveur MCP ---
@@ -422,6 +506,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   try {
     const result = await handleToolCall(name, args || {});
+
+    // Auto-reporter chaque appel MCP comme activite (heartbeat implicite)
+    // Pas besoin de rapporter les tools de lecture qui ne changent rien
+    if (!name.startsWith('supervisor_get_') && name !== 'supervisor_health_status') {
+      apiCall('PUT', `/api/sessions/${SESSION_ID}/heartbeat`, {
+        action: `MCP: ${name}`,
+        directory: SESSION_DIR,
+        timestamp: new Date().toISOString(),
+      }).catch(() => {}); // Fire and forget
+    }
+
     return {
       content: [{ type: 'text', text: result }],
     };
@@ -437,6 +532,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 async function main() {
   // Enregistrer la session des le demarrage
   await ensureRegistered();
+
+  // Demarrer le heartbeat periodique
+  startHeartbeat();
 
   const transport = new StdioServerTransport();
   await server.connect(transport);

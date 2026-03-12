@@ -1,4 +1,9 @@
-const Anthropic = require('@anthropic-ai/sdk');
+let Anthropic;
+try {
+  Anthropic = require('@anthropic-ai/sdk');
+} catch {
+  // SDK optionnel
+}
 
 /**
  * Agent specialise dans la recherche d'irritants lies a l'utilisation
@@ -11,7 +16,7 @@ const Anthropic = require('@anthropic-ai/sdk');
 class IrritantResearcher {
   constructor(broadcast) {
     this.broadcast = broadcast;
-    this.client = new Anthropic();
+    this.client = Anthropic ? new Anthropic() : null;
     this.irritants = [];
     this.categories = [
       'context_loss',        // Perte de contexte entre sessions
@@ -49,6 +54,9 @@ Pour chaque irritant identifie, donne:
 
 Reponds en JSON: { "irritants": [{ "category", "description", "impact", "solution" }] }`;
 
+    if (!this.client) {
+      throw new Error('API Anthropic non disponible (SDK manquant ou cle absente)');
+    }
     try {
       const response = await this.client.messages.create({
         model: 'claude-sonnet-4-5-20250929',

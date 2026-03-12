@@ -44,6 +44,33 @@ router.post('/:id/message', (req, res) => {
   res.status(201).json(message);
 });
 
+// Heartbeat d'une session (appele automatiquement par les hooks Claude Code)
+// Cree la session si elle n'existe pas, sinon met a jour lastUpdate + action
+router.put('/:id/heartbeat', (req, res) => {
+  const tracker = req.app.locals.tracker;
+  const sessionId = req.params.id;
+  const { action, directory, tool, timestamp } = req.body;
+
+  // Verifier si la session existe
+  let session = tracker.getAllSessions().find((s) => s.id === sessionId);
+
+  if (!session) {
+    // Auto-enregistrement via heartbeat
+    session = tracker.registerSession(sessionId, {
+      name: directory ? require('path').basename(directory) : `Terminal ${sessionId.substring(0, 8)}`,
+      directory: directory || '',
+      status: 'active',
+    });
+  }
+
+  // Mettre a jour la session (status actif + action eventuelle)
+  const update = { status: 'active' };
+  if (action) update.action = action;
+
+  const updated = tracker.updateSession(sessionId, update);
+  res.json(updated || session);
+});
+
 // Supprimer une session
 router.delete('/:id', (req, res) => {
   const tracker = req.app.locals.tracker;

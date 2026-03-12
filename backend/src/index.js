@@ -22,6 +22,13 @@ const { SharedContext } = require('./services/shared-context');
 const { EnvWatcher } = require('./services/env-watcher');
 const { NotificationManager } = require('./services/notification-manager');
 const { GitOrchestrator } = require('./services/git-orchestrator');
+const { SupervisorMode } = require('./services/supervisor-mode');
+let IrritantResearcher;
+try {
+  IrritantResearcher = require('./services/agents/irritant-researcher').IrritantResearcher;
+} catch {}
+const irritantRoutes = require('./routes/irritants');
+const supervisorModeRoutes = require('./routes/supervisor-mode');
 const timelineRoutes = require('./routes/timeline');
 const lockRoutes = require('./routes/locks');
 const messageRoutes = require('./routes/messages');
@@ -118,6 +125,20 @@ const envWatcher = new EnvWatcher(broadcast, store);
 const notificationManager = new NotificationManager(store);
 const gitOrchestrator = new GitOrchestrator(broadcast, store);
 
+// Initialiser le mode superviseur
+const supervisorMode = new SupervisorMode(tracker, messageBus, broadcast, store);
+
+// Initialiser l'agent de recherche d'irritants (Anthropic SDK optionnel)
+let irritantResearcher = null;
+try {
+  if (IrritantResearcher) {
+    irritantResearcher = new IrritantResearcher(broadcast);
+    console.log('IrritantResearcher initialise');
+  }
+} catch (err) {
+  console.log('IrritantResearcher non disponible (SDK Anthropic manquant)');
+}
+
 // Initialiser le protocole WebSocket
 const wsProtocol = new WsProtocol(wss, tracker, broadcast, { lockManager, messageBus });
 
@@ -135,6 +156,8 @@ app.locals.sharedContext = sharedContext;
 app.locals.envWatcher = envWatcher;
 app.locals.notificationManager = notificationManager;
 app.locals.gitOrchestrator = gitOrchestrator;
+app.locals.irritantResearcher = irritantResearcher;
+app.locals.supervisorMode = supervisorMode;
 
 // REST API routes
 app.use('/api/agents', agentRoutes);
@@ -149,6 +172,8 @@ app.use('/api/context', contextRoutes);
 app.use('/api/env', envRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/git', gitRoutes);
+app.use('/api/irritants', irritantRoutes);
+app.use('/api/supervisor', supervisorModeRoutes);
 
 app.get('/api/health', (req, res) => {
   res.json({
