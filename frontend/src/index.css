@@ -54,3 +54,27 @@ body {
 .status-idle { background: rgba(156, 163, 175, 0.15); color: var(--text-secondary); }
 .status-working { background: rgba(139, 92, 246, 0.15); color: var(--accent); }
 .status-error { background: rgba(239, 68, 68, 0.15); color: var(--error); }
+.status-disconnected { background: rgba(245, 158, 11, 0.15); color: var(--warning); }
+.status-stale { background: rgba(156, 163, 175, 0.15); color: var(--text-secondary); }
+
+/* Loading states */
+.loading-placeholder {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--text-secondary);
+  padding: 24px 0;
+}
+
+.loading-spinner {
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}

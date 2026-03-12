@@ -3,7 +3,7 @@
 ## Prerequis
 - Node.js >= 18
 - npm >= 9
-- Une cle API Anthropic
+- Claude Code connecte a votre compte web (pas de cle API necessaire)
 
 ## Installation
 
@@ -15,7 +15,6 @@ cd claude-supervisor
 cd backend
 npm install
 cp .env.example .env
-# Editer .env et ajouter votre ANTHROPIC_API_KEY
 
 # Installer les dependances frontend
 cd ../frontend

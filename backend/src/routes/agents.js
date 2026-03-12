@@ -1,5 +1,5 @@
 const express = require('express');
-const { v4: uuidv4 } = require('crypto');
+const crypto = require('crypto');
 const router = express.Router();
 
 // List all agents
