@@ -67,15 +67,18 @@ class TerminalManager {
     const shell = isWindows ? 'cmd.exe' : (process.env.SHELL || '/bin/bash');
 
     // Construire la commande claude
+    // Le prompt est un argument positionnel : claude [options] "prompt"
     const claudeArgs = ['claude'];
     if (options.dangerousMode) {
       claudeArgs.push('--dangerously-skip-permissions');
     }
-    if (effectivePrompt) {
-      claudeArgs.push('--prompt', effectivePrompt);
-    }
     if (options.model) {
       claudeArgs.push('--model', options.model);
+    }
+    if (effectivePrompt) {
+      // Echapper les guillemets pour eviter les injections dans le shell
+      const escaped = effectivePrompt.replace(/"/g, '\\"');
+      claudeArgs.push(`"${escaped}"`);
     }
     // On lance le shell, puis on executera claude dedans
     const shellArgs = isWindows ? ['/k', claudeArgs.join(' ')] : ['-c', claudeArgs.join(' ')];
