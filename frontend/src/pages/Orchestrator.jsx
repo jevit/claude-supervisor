@@ -2,6 +2,15 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useWebSocket } from '../services/websocket';
 
+const STATUS_COLOR = {
+  running: '#8b5cf6', completed: '#10b981', exited: '#10b981',
+  waiting: '#64748b', error: '#ef4444', cancelled: '#f59e0b', killed: '#ef4444',
+};
+const ANSI_RE = /\x1b\[[0-9;]*[a-zA-Z]/g; // eslint-disable-line no-control-regex
+const cleanAnsi = (s) => (s || '').replace(ANSI_RE, '');
+const lastLines = (raw, n = 4) =>
+  cleanAnsi(raw).split('\n').map((l) => l.trimEnd()).filter(Boolean).slice(-n).join('\n');
+
 /* ── Carte KPI ───────────────────────────────────────────────────── */
 function Kpi({ value, label, color = '#8b5cf6', onClick }) {
   return (
@@ -213,7 +222,7 @@ function SquadCard({ squad, outputs, onBroadcast, onNavigate }) {
 /* ── Carte terminal standalone ───────────────────────────────────── */
 function TerminalCard({ terminal, output, onNavigate }) {
   const lines = lastLines(output, 5);
-  const color = terminal.status === 'running' ? '#22c55e' : '#ef4444';
+  const color = STATUS_COLOR[terminal.status] || '#64748b';
 
   return (
     <div className="orc-term" style={{ borderLeftColor: color }}>
@@ -309,11 +318,20 @@ export default function Orchestrator() {
       )
     );
     setOutputs((prev) => {
-      const next = { ...prev };
-      for (const r of results) {
-        if (r.status === 'fulfilled') next[r.value[0]] = r.value[1];
+      const idSet = new Set(termIds);
+      let changed = false;
+      const next = {};
+      // Conserver uniquement les terminaux actifs
+      for (const [k, v] of Object.entries(prev)) {
+        if (idSet.has(k)) next[k] = v;
       }
-      return next;
+      for (const r of results) {
+        if (r.status === 'fulfilled') {
+          const [id, val] = r.value;
+          if (next[id] !== val) { next[id] = val; changed = true; }
+        }
+      }
+      return changed ? next : prev;
     });
   }, []);
 
@@ -401,7 +419,7 @@ export default function Orchestrator() {
             ⚠ Conflits actifs ({conflicts.length})
           </div>
           <div className="orc-conflicts-list">
-            {conflicts.map((c, i) => <ConflictRow key={i} conflict={c} />)}
+            {conflicts.map((c) => <ConflictRow key={`${c.type}:${c.path || c.directory || ''}`} conflict={c} />)}
           </div>
         </section>
       )}
