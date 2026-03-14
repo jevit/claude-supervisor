@@ -17,8 +17,9 @@ const LAYOUTS = [
 /**
  * Composant d'un terminal individuel avec xterm.js.
  * Gère le replay du buffer au montage et à chaque reconnexion WS.
+ * En mode ghost (session interrompue), affiche le buffer sauvegardé + bannière de reprise.
  */
-function TerminalView({ terminalId, terminalName, terminalDirectory, onClose, onRename, compact = false }) {
+function TerminalView({ terminalId, terminalName, terminalDirectory, terminalStatus, onClose, onRename, onResume, compact = false }) {
   const containerRef   = useRef(null);
   const xtermRef       = useRef(null);
   const fitAddonRef    = useRef(null);
@@ -27,6 +28,9 @@ function TerminalView({ terminalId, terminalName, terminalDirectory, onClose, on
   const destroyedRef   = useRef(false);
   const reconnTimerRef = useRef(null);
   const searchInputRef = useRef(null);
+
+  const isGhost = terminalStatus === 'ghost';
+  const [resuming,          setResuming]          = useState(false);
 
   const [editing,           setEditing]           = useState(false);
   const [editName,          setEditName]          = useState(terminalName || '');
@@ -119,13 +123,15 @@ function TerminalView({ terminalId, terminalName, terminalDirectory, onClose, on
       }).catch(() => {});
     });
 
-    /* ── Saisie utilisateur → backend ─────────────────────────── */
-    xterm.onData((data) => {
-      fetch(`/api/terminals/${terminalId}/write`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ data }),
-      }).catch(() => {});
-    });
+    /* ── Saisie utilisateur → backend (desactive en mode ghost) ── */
+    if (!isGhost) {
+      xterm.onData((data) => {
+        fetch(`/api/terminals/${terminalId}/write`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ data }),
+        }).catch(() => {});
+      });
+    }
 
     /* ── Focus auto sur le terminal (hors recherche) ─────────── */
     containerRef.current?.addEventListener('click', () => {
@@ -195,6 +201,16 @@ function TerminalView({ terminalId, terminalName, terminalDirectory, onClose, on
       };
     };
 
+    // En mode ghost : replay du buffer uniquement, pas de WS live
+    if (isGhost) {
+      replayBuffer();
+      return () => {
+        destroyedRef.current = true;
+        resizeObserver.disconnect();
+        xterm.dispose();
+      };
+    }
+
     connect(); // connexion initiale
 
     return () => {
@@ -236,10 +252,11 @@ function TerminalView({ terminalId, terminalName, terminalDirectory, onClose, on
       caseSensitive: matchCase,
       incremental: true,
       decorations: {
-        matchBackground:        '#f59e0b33',
-        matchBorder:            '#f59e0b',
-        activeMatchBackground:  '#f59e0b88',
-        activeMatchBorder:      '#f59e0b',
+        matchBackground:              '#f59e0b33',
+        matchBorder:                  '#f59e0b',
+        matchOverviewRuler:           '#f59e0b',
+        activeMatchBackground:        '#f59e0b88',
+        activeMatchBorder:            '#f59e0b',
         activeMatchColorOverviewRuler: '#f59e0b',
       },
     });
@@ -381,6 +398,40 @@ function TerminalView({ terminalId, terminalName, terminalDirectory, onClose, on
         </div>
       )}
 
+      {/* Bannière session interrompue (mode ghost) */}
+      {isGhost && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 10,
+          padding: '6px 12px', background: 'rgba(245,158,11,0.12)',
+          borderBottom: '1px solid rgba(245,158,11,0.3)', flexShrink: 0,
+        }}>
+          <span style={{ fontSize: 13 }}>⚠</span>
+          <span style={{ fontSize: 12, color: '#f59e0b', flex: 1 }}>
+            Session interrompue — buffer sauvegardé affiché en lecture seule
+          </span>
+          <button
+            onClick={async () => {
+              setResuming(true);
+              try {
+                await fetch(`/api/terminals/${terminalId}/resume`, { method: 'POST' });
+                onResume?.();
+              } catch {}
+              setResuming(false);
+            }}
+            disabled={resuming}
+            style={{
+              background: resuming ? 'rgba(245,158,11,0.1)' : 'rgba(245,158,11,0.2)',
+              border: '1px solid rgba(245,158,11,0.5)',
+              borderRadius: 5, color: '#f59e0b',
+              padding: '3px 12px', cursor: resuming ? 'not-allowed' : 'pointer',
+              fontSize: 12, fontWeight: 700, opacity: resuming ? 0.6 : 1,
+            }}
+          >
+            {resuming ? '…' : '↺ Reprendre'}
+          </button>
+        </div>
+      )}
+
       {/* Corps : les deux panneaux coexistent — display:none évite de détruire xterm */}
       <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
         {/* Terminal xterm — toujours monté */}
@@ -450,6 +501,37 @@ export default function Terminals() {
   const [injectContext, setInjectContext] = useState(true);
   const [contextCount, setContextCount]   = useState(0);
 
+  // Historique des répertoires (localStorage)
+  const [dirHistory, setDirHistory] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('cs:dir-history') || '[]'); } catch { return []; }
+  });
+  const [dirDropOpen, setDirDropOpen] = useState(false);
+  const dirComboRef = useRef(null);
+
+  const saveDirToHistory = (dir) => {
+    if (!dir.trim()) return;
+    const next = [dir.trim(), ...dirHistory.filter((d) => d !== dir.trim())].slice(0, 15);
+    setDirHistory(next);
+    localStorage.setItem('cs:dir-history', JSON.stringify(next));
+  };
+
+  const removeDirFromHistory = (dir) => {
+    const next = dirHistory.filter((d) => d !== dir);
+    setDirHistory(next);
+    localStorage.setItem('cs:dir-history', JSON.stringify(next));
+  };
+
+  // Fermer le dropdown si clic en dehors
+  useEffect(() => {
+    const handler = (e) => {
+      if (dirComboRef.current && !dirComboRef.current.contains(e.target)) {
+        setDirDropOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
   // Charger le nombre d'entrees de contexte partagé pour affichage dans le formulaire
   useEffect(() => {
     fetch('/api/context')
@@ -498,6 +580,7 @@ export default function Terminals() {
         } else {
           setActiveTerminal(data.terminalId);
         }
+        if (directory.trim()) saveDirToHistory(directory.trim());
         setDirectory(''); setName(''); setPrompt('');
         fetchTerminals();
       }
@@ -630,7 +713,67 @@ export default function Terminals() {
           <div className="card">
             <h3 style={{ marginBottom: 10, fontSize: 13 }}>Lancer un terminal</h3>
             <form onSubmit={spawnTerminal} style={{ display: 'grid', gap: 7 }}>
-              <input placeholder="Repertoire (ex: C:/mon-projet)" value={directory} onChange={(e) => setDirectory(e.target.value)} className="form-input" />
+              {/* Répertoire — combobox avec historique */}
+              <div ref={dirComboRef} style={{ position: 'relative' }}>
+                <div style={{ display: 'flex', alignItems: 'center', position: 'relative' }}>
+                  <input
+                    placeholder="Répertoire (ex: C:/mon-projet)"
+                    value={directory}
+                    onChange={(e) => { setDirectory(e.target.value); setDirDropOpen(true); }}
+                    onFocus={() => dirHistory.length > 0 && setDirDropOpen(true)}
+                    className="form-input"
+                    style={{ paddingRight: 26 }}
+                  />
+                  {/* Chevron toggle */}
+                  {dirHistory.length > 0 && (
+                    <button type="button" onClick={() => setDirDropOpen((v) => !v)} style={{
+                      position: 'absolute', right: 6, background: 'none', border: 'none',
+                      color: '#565f89', cursor: 'pointer', padding: '0 2px', fontSize: 10, lineHeight: 1,
+                    }}>
+                      {dirDropOpen ? '▲' : '▼'}
+                    </button>
+                  )}
+                </div>
+                {/* Dropdown */}
+                {dirDropOpen && dirHistory.length > 0 && (() => {
+                  const q = directory.toLowerCase();
+                  const filtered = dirHistory.filter((d) => !q || d.toLowerCase().includes(q));
+                  if (!filtered.length) return null;
+                  return (
+                    <div style={{
+                      position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 100,
+                      background: '#1f2335', border: '1px solid #3b4261', borderRadius: 6,
+                      boxShadow: '0 8px 24px rgba(0,0,0,0.5)', marginTop: 2,
+                      maxHeight: 220, overflowY: 'auto',
+                    }}>
+                      {filtered.map((d) => (
+                        <div key={d} style={{ display: 'flex', alignItems: 'center', borderBottom: '1px solid #2a2b3d' }}>
+                          <button type="button" onClick={() => { setDirectory(d); setDirDropOpen(false); }}
+                            style={{
+                              flex: 1, background: 'none', border: 'none', color: '#c0caf5',
+                              cursor: 'pointer', padding: '7px 10px', textAlign: 'left',
+                              fontSize: 11, fontFamily: 'monospace',
+                              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                            }}
+                            title={d}
+                          >
+                            <span style={{ color: '#565f89', marginRight: 4 }}>📁</span>
+                            {d}
+                          </button>
+                          <button type="button" onClick={(e) => { e.stopPropagation(); removeDirFromHistory(d); }}
+                            style={{
+                              background: 'none', border: 'none', color: '#565f89',
+                              cursor: 'pointer', padding: '7px 8px', fontSize: 11,
+                              flexShrink: 0, lineHeight: 1,
+                            }}
+                            title="Supprimer de l'historique"
+                          >×</button>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
+              </div>
               <input placeholder="Nom (optionnel)" value={name} onChange={(e) => setName(e.target.value)} className="form-input" />
               <textarea placeholder="Prompt initial (optionnel)" value={prompt} onChange={(e) => setPrompt(e.target.value)} className="form-input" rows={2} style={{ resize: 'vertical' }} />
               <select value={model} onChange={(e) => setModel(e.target.value)} className="form-input">
@@ -683,6 +826,8 @@ export default function Terminals() {
                   const isActive   = !gridMode && activeTerminal === t.id;
                   const inGrid     = gridMode && gridTerminals.includes(t.id);
                   const gridIndex  = gridTerminals.indexOf(t.id);
+                  const isGhostT   = t.status === 'ghost';
+                  const statusColor = t.status === 'running' ? '#22c55e' : isGhostT ? '#f59e0b' : '#ef4444';
 
                   return (
                     <div
@@ -692,7 +837,7 @@ export default function Terminals() {
                         padding: '8px 10px',
                         cursor: 'pointer',
                         border: isActive || inGrid ? '2px solid var(--accent)' : '1px solid var(--border)',
-                        borderLeft: `3px solid ${t.status === 'running' ? '#22c55e' : '#ef4444'}`,
+                        borderLeft: `3px solid ${statusColor}`,
                         opacity: gridMode && gridTerminals.length >= layout.max && !inGrid ? 0.5 : 1,
                       }}
                       onClick={() => handleTerminalClick(t.id)}
@@ -729,11 +874,11 @@ export default function Terminals() {
                         <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexShrink: 0 }}>
                           <span style={{
                             fontSize: 9, padding: '1px 6px', borderRadius: 8,
-                            background: t.status === 'running' ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)',
-                            color: t.status === 'running' ? '#22c55e' : '#ef4444',
+                            background: t.status === 'running' ? 'rgba(34,197,94,0.15)' : isGhostT ? 'rgba(245,158,11,0.15)' : 'rgba(239,68,68,0.15)',
+                            color: statusColor,
                             fontWeight: 700, textTransform: 'uppercase',
                           }}>
-                            {t.status}
+                            {isGhostT ? 'interrompu' : t.status}
                           </span>
                           {t.status === 'running' && (
                             <button
@@ -742,6 +887,19 @@ export default function Terminals() {
                               title="Arreter"
                             >
                               ×
+                            </button>
+                          )}
+                          {isGhostT && (
+                            <button
+                              onClick={async (e) => {
+                                e.stopPropagation();
+                                await fetch(`/api/terminals/${t.id}/resume`, { method: 'POST' });
+                                fetchTerminals();
+                              }}
+                              style={{ background: 'none', border: '1px solid rgba(245,158,11,0.4)', borderRadius: 3, color: '#f59e0b', cursor: 'pointer', fontSize: 11, padding: '1px 6px', lineHeight: 1 }}
+                              title="Reprendre la session"
+                            >
+                              ↺
                             </button>
                           )}
                         </div>
@@ -773,11 +931,14 @@ export default function Terminals() {
               return (
                 <div key={termId} style={{ border: '1px solid var(--border)', borderRadius: 6, overflow: 'hidden', background: '#1a1b26', minHeight: 0 }}>
                   <TerminalView
+                    key={`${termId}-${t?.status}`}
                     terminalId={termId}
                     terminalName={t?.name}
                     terminalDirectory={t?.directory}
+                    terminalStatus={t?.status}
                     onClose={() => removeFromGrid(termId)}
                     onRename={renameTerminal}
+                    onResume={fetchTerminals}
                     compact={layout.cols > 1 || layout.rows > 2}
                   />
                 </div>
@@ -789,12 +950,14 @@ export default function Terminals() {
           <div style={{ border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden', background: '#1a1b26', minHeight: 400 }}>
             {activeTerminal ? (
               <TerminalView
-                key={activeTerminal}
+                key={`${activeTerminal}-${terminals.find((t) => t.id === activeTerminal)?.status}`}
                 terminalId={activeTerminal}
                 terminalName={terminals.find((t) => t.id === activeTerminal)?.name}
                 terminalDirectory={terminals.find((t) => t.id === activeTerminal)?.directory}
+                terminalStatus={terminals.find((t) => t.id === activeTerminal)?.status}
                 onClose={() => setActiveTerminal(null)}
                 onRename={renameTerminal}
+                onResume={fetchTerminals}
               />
             ) : (
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#565f89', fontSize: 14 }}>

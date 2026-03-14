@@ -241,7 +241,9 @@ REGLES DE COORDINATION:
 
     for (const member of squad.members) {
       if (member.id && member.status === 'running') {
-        try { this.terminalManager.kill(member.id); } catch {}
+        try { this.terminalManager.kill(member.id); } catch (err) {
+          console.warn(`SquadManager: echec kill terminal ${member.id}: ${err.message}`);
+        }
         member.status = 'cancelled';
         member.completedAt = new Date().toISOString();
       }
@@ -250,7 +252,9 @@ REGLES DE COORDINATION:
         delete member._spawnConfig;
       }
       if (member.worktreePath && this.worktreeManager) {
-        try { this.worktreeManager.remove(member.worktreePath, member.branch); } catch {}
+        try { this.worktreeManager.remove(member.worktreePath, member.branch); } catch (err) {
+          console.warn(`SquadManager: echec remove worktree ${member.worktreePath}: ${err.message}`);
+        }
         member.worktreePath = null;
       }
     }
@@ -268,7 +272,9 @@ REGLES DE COORDINATION:
     let sent = 0;
     for (const member of squad.members) {
       if (member.id && member.status === 'running') {
-        try { this.terminalManager.write(member.id, message + '\n'); sent++; } catch {}
+        try { this.terminalManager.write(member.id, message + '\n'); sent++; } catch (err) {
+          console.warn(`SquadManager: echec write terminal ${member.id}: ${err.message}`);
+        }
       }
     }
     return sent;
@@ -335,8 +341,14 @@ REGLES DE COORDINATION:
   }
 
   _syncAll() {
-    for (const squad of this.squads.values()) {
-      if (squad.status === 'running') this._syncMemberStatuses(squad);
+    if (this._syncing) return;
+    this._syncing = true;
+    try {
+      for (const squad of this.squads.values()) {
+        if (squad.status === 'running') this._syncMemberStatuses(squad);
+      }
+    } finally {
+      this._syncing = false;
     }
   }
 
@@ -364,10 +376,14 @@ REGLES DE COORDINATION:
     if (!squad) return false;
     for (const member of squad.members) {
       if (member.id && member.status === 'running') {
-        try { this.terminalManager.kill(member.id); } catch {}
+        try { this.terminalManager.kill(member.id); } catch (err) {
+          console.warn(`SquadManager: echec kill terminal ${member.id}: ${err.message}`);
+        }
       }
       if (member.worktreePath && this.worktreeManager) {
-        try { this.worktreeManager.remove(member.worktreePath, member.branch); } catch {}
+        try { this.worktreeManager.remove(member.worktreePath, member.branch); } catch (err) {
+          console.warn(`SquadManager: echec remove worktree ${member.worktreePath}: ${err.message}`);
+        }
       }
     }
     this.squads.delete(squadId);

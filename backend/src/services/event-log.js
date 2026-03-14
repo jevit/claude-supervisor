@@ -76,6 +76,30 @@ class EventLog {
         return { agentId: data.agentId, taskId: data.task?.id };
       case 'task:failed':
         return { agentId: data.agentId, taskId: data.task?.id, error: data.error };
+      case 'terminal:spawned':
+        return { terminalId: data.terminalId, name: data.name, directory: data.directory };
+      case 'terminal:exited':
+        return { terminalId: data.terminalId, exitCode: data.exitCode };
+      case 'terminal:attention':
+        return { terminalId: data.terminalId, name: data.name, reason: data.reason };
+      case 'lock:acquired':
+      case 'lock:released':
+        return { lockId: data.id, file: data.file, sessionId: data.sessionId };
+      case 'lock:released-all':
+        return { sessionId: data.sessionId, count: data.count };
+      case 'conflict:detected':
+        return { file: data.file, sessions: data.sessions };
+      case 'context:set':
+        return { key: data.key, source: data.source };
+      case 'squad:created':
+        return { id: data.id, name: data.name, memberCount: data.memberCount };
+      case 'squad:completed':
+      case 'squad:cancelled':
+        return { id: data.id, name: data.name };
+      case 'squad:member-started':
+        return { squadId: data.squadId, memberName: data.memberName, terminalId: data.terminalId };
+      case 'message:sent':
+        return { from: data.from, to: data.to, preview: String(data.content || '').slice(0, 80) };
       default:
         // Pour les types inconnus, garder un resume compact
         return typeof data === 'object' ? { id: data.id } : {};

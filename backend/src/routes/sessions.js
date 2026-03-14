@@ -98,15 +98,19 @@ router.post('/:id/message', (req, res) => {
   res.status(201).json(message);
 });
 
+// Outils qui ecrivent des fichiers (genèrent un event file:activity)
+const FILE_WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
+
 // Heartbeat d'une session (appele automatiquement par les hooks Claude Code)
 // Cree la session si elle n'existe pas, sinon met a jour lastUpdate + action
 router.put('/:id/heartbeat', (req, res) => {
-  const tracker = req.app.locals.tracker;
+  const tracker   = req.app.locals.tracker;
+  const broadcast = req.app.locals.broadcast;
   const sessionId = req.params.id;
   const { action, directory, tool, timestamp } = req.body;
 
   // Verifier si la session existe
-  let session = tracker.getAllSessions().find((s) => s.id === sessionId);
+  let session = tracker.getSession(sessionId);
 
   if (!session) {
     // Auto-enregistrement via heartbeat
@@ -122,6 +126,21 @@ router.put('/:id/heartbeat', (req, res) => {
   if (action) update.action = action;
 
   const updated = tracker.updateSession(sessionId, update);
+
+  // Broadcast file:activity pour les outils d'ecriture de fichiers
+  if (tool && FILE_WRITE_TOOLS.has(tool) && broadcast) {
+    // Extraire le chemin depuis "Write: mon-fichier.js" ou "Edit: mon-fichier.js"
+    const filePath = action ? action.replace(/^[^:]+:\s*/, '').trim() : '';
+    broadcast('file:activity', {
+      sessionId,
+      sessionName: (updated || session).name,
+      tool,
+      filePath,
+      directory: directory || (updated || session).directory || '',
+      timestamp: timestamp || new Date().toISOString(),
+    });
+  }
+
   res.json(updated || session);
 });
 

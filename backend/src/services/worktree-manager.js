@@ -1,4 +1,4 @@
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 
@@ -43,7 +43,7 @@ class WorktreeManager {
       return wtPath;
     }
 
-    execSync(`git worktree add "${wtPath}" -b "${branchName}"`, {
+    execFileSync('git', ['worktree', 'add', wtPath, '-b', branchName], {
       cwd: this.repoRoot,
       stdio: 'pipe',
     });
@@ -58,11 +58,13 @@ class WorktreeManager {
    */
   remove(worktreePath, branch = null) {
     try {
-      execSync(`git worktree remove "${worktreePath}" --force`, {
+      execFileSync('git', ['worktree', 'remove', worktreePath, '--force'], {
         cwd: this.repoRoot,
         stdio: 'pipe',
       });
-    } catch {}
+    } catch (err) {
+      console.warn(`WorktreeManager: echec worktree remove ${worktreePath}: ${err.message}`);
+    }
 
     // Supprimer aussi le dossier si git ne l'a pas fait
     try {
@@ -74,11 +76,13 @@ class WorktreeManager {
     // Supprimer la branche locale
     if (branch) {
       try {
-        execSync(`git branch -D "${branch}"`, {
+        execFileSync('git', ['branch', '-D', branch], {
           cwd: this.repoRoot,
           stdio: 'pipe',
         });
-      } catch {}
+      } catch (err) {
+        console.warn(`WorktreeManager: echec branch -D ${branch}: ${err.message}`);
+      }
     }
 
     this.prune();

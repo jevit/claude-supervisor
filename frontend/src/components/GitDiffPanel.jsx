@@ -1,11 +1,12 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 
 /**
- * Panneau de diff Git - affiche les modifications dans un repertoire.
+ * Panneau de diff Git — unified ou side-by-side, liste ou arbre de fichiers.
  * Props: { directory, terminalId, onClose }
  */
 
-// Parser un diff unifie en blocs structures
+/* ── Parsers ─────────────────────────────────────────────────────── */
+
 function parseDiff(raw) {
   if (!raw) return [];
   const lines = raw.split('\n');
@@ -13,74 +14,192 @@ function parseDiff(raw) {
   let currentHunk = null;
   let oldLine = 0;
   let newLine = 0;
-
   for (const line of lines) {
-    // En-tete de chunk
-    const hunkMatch = line.match(/^@@\s+-(\d+)(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s+@@(.*)/);
-    if (hunkMatch) {
+    const m = line.match(/^@@\s+-(\d+)(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s+@@(.*)/);
+    if (m) {
       currentHunk = { header: line, lines: [] };
       hunks.push(currentHunk);
-      oldLine = parseInt(hunkMatch[1], 10);
-      newLine = parseInt(hunkMatch[2], 10);
+      oldLine = parseInt(m[1], 10);
+      newLine = parseInt(m[2], 10);
       continue;
     }
-
     if (!currentHunk) continue;
-
     if (line.startsWith('+')) {
-      currentHunk.lines.push({ type: 'add', content: line.substring(1), oldNum: null, newNum: newLine });
-      newLine++;
+      currentHunk.lines.push({ type: 'add', content: line.substring(1), oldNum: null, newNum: newLine++ });
     } else if (line.startsWith('-')) {
-      currentHunk.lines.push({ type: 'del', content: line.substring(1), oldNum: oldLine, newNum: null });
-      oldLine++;
-    } else if (line.startsWith('\\')) {
-      // "\ No newline at end of file" - ignorer
-      continue;
-    } else {
-      currentHunk.lines.push({ type: 'ctx', content: line.substring(1), oldNum: oldLine, newNum: newLine });
-      oldLine++;
-      newLine++;
+      currentHunk.lines.push({ type: 'del', content: line.substring(1), oldNum: oldLine++, newNum: null });
+    } else if (!line.startsWith('\\')) {
+      currentHunk.lines.push({ type: 'ctx', content: line.substring(1), oldNum: oldLine++, newNum: newLine++ });
     }
   }
   return hunks;
 }
 
-// Icone de statut pour un fichier
-function statusIcon(status) {
-  switch (status) {
-    case 'modified': return { letter: 'M', color: '#3b82f6' };
-    case 'added': return { letter: 'A', color: '#10b981' };
-    case 'deleted': return { letter: 'D', color: '#ef4444' };
-    case 'untracked': return { letter: '?', color: '#6b7280' };
-    default: return { letter: '?', color: '#6b7280' };
+// Convertit des hunks en lignes côte-à-côte { left, right }
+function buildSideBySide(hunks) {
+  const rows = [];
+  for (const hunk of hunks) {
+    rows.push({ isHeader: true, header: hunk.header });
+    const lines = hunk.lines;
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i];
+      if (line.type === 'ctx') {
+        rows.push({
+          left:  { num: line.oldNum, content: line.content, type: 'ctx' },
+          right: { num: line.newNum, content: line.content, type: 'ctx' },
+        });
+        i++;
+      } else if (line.type === 'del' || line.type === 'add') {
+        // Ramasser tous les del consécutifs puis les add consécutifs
+        const dels = [];
+        while (i < lines.length && lines[i].type === 'del') { dels.push(lines[i]); i++; }
+        const adds = [];
+        while (i < lines.length && lines[i].type === 'add') { adds.push(lines[i]); i++; }
+        const len = Math.max(dels.length, adds.length);
+        for (let j = 0; j < len; j++) {
+          rows.push({
+            left:  dels[j] ? { num: dels[j].oldNum, content: dels[j].content, type: 'del' }
+                           : { num: '', content: '', type: 'empty' },
+            right: adds[j] ? { num: adds[j].newNum, content: adds[j].content, type: 'add' }
+                           : { num: '', content: '', type: 'empty' },
+          });
+        }
+      } else {
+        i++;
+      }
+    }
   }
+  return rows;
+}
+
+// Construit un arbre { dirs: {name: node}, files: [file] } depuis une liste plate
+function buildFileTree(files) {
+  const root = { dirs: {}, files: [] };
+  for (const f of files) {
+    const parts = f.path.replace(/\\/g, '/').split('/');
+    let node = root;
+    for (let i = 0; i < parts.length - 1; i++) {
+      const p = parts[i];
+      if (!node.dirs[p]) node.dirs[p] = { dirs: {}, files: [] };
+      node = node.dirs[p];
+    }
+    node.files.push(f);
+  }
+  return root;
+}
+
+/* ── Couleur de statut ───────────────────────────────────────────── */
+function fileColor(f) {
+  if (f.status === 'untracked') return '#6b7280';
+  if (f.status === 'deleted')   return '#ef4444';
+  if (f.status === 'added')     return '#10b981';
+  if (f.staged && !f.unstaged) return '#10b981'; // entièrement stagé → vert
+  if (f.unstaged)               return '#f59e0b'; // non-stagé → orange
+  return '#3b82f6';
+}
+function fileStatusLetter(f) {
+  if (f.status === 'untracked') return '?';
+  if (f.status === 'deleted')   return 'D';
+  if (f.status === 'added')     return 'A';
+  if (f.staged && !f.unstaged) return 'S';
+  return 'M';
+}
+
+/* ── Composant arbre de fichiers ─────────────────────────────────── */
+function FileTreeNode({ name, node, selectedFile, onSelect, depth = 0 }) {
+  const [open, setOpen] = useState(true);
+  const hasFiles = node.files.length > 0;
+  const hasDirs  = Object.keys(node.dirs).length > 0;
+  const indent   = depth * 12;
+
+  return (
+    <div>
+      {name && (
+        <div
+          onClick={() => setOpen((v) => !v)}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 4,
+            padding: `4px 10px 4px ${10 + indent}px`,
+            cursor: 'pointer', userSelect: 'none',
+            borderBottom: '1px solid rgba(45,49,72,0.3)',
+            color: '#565f89', fontSize: 11,
+          }}
+        >
+          <span style={{ fontSize: 9, opacity: 0.7 }}>{open ? '▼' : '▶'}</span>
+          <span style={{ fontFamily: 'monospace' }}>📁 {name}</span>
+        </div>
+      )}
+      {open && (
+        <>
+          {Object.entries(node.dirs).map(([dirName, child]) => (
+            <FileTreeNode
+              key={dirName}
+              name={dirName}
+              node={child}
+              selectedFile={selectedFile}
+              onSelect={onSelect}
+              depth={depth + (name ? 1 : 0)}
+            />
+          ))}
+          {hasFiles && node.files.map((f) => {
+            const color  = fileColor(f);
+            const letter = fileStatusLetter(f);
+            const isActive = selectedFile === f.path;
+            const fileName = f.path.replace(/\\/g, '/').split('/').pop();
+            return (
+              <div
+                key={f.path}
+                onClick={() => onSelect(f.path)}
+                title={f.path}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 6,
+                  padding: `5px 10px 5px ${10 + indent + (name ? 12 : 0)}px`,
+                  cursor: 'pointer', borderBottom: '1px solid rgba(45,49,72,0.4)',
+                  background: isActive ? 'rgba(139,92,246,0.1)' : 'transparent',
+                  borderLeft: isActive ? '2px solid #8b5cf6' : '2px solid transparent',
+                  transition: 'background 0.1s',
+                }}
+              >
+                <span style={{
+                  width: 16, height: 16, borderRadius: 3,
+                  background: color + '22', color, fontSize: 10,
+                  fontWeight: 700, fontFamily: 'monospace',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  flexShrink: 0,
+                }}>{letter}</span>
+                <span style={{
+                  fontSize: 11, fontFamily: 'monospace', color: '#c0caf5',
+                  flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                }}>{fileName}</span>
+              </div>
+            );
+          })}
+        </>
+      )}
+    </div>
+  );
 }
 
 /* ── Diff d'un commit spécifique ─────────────────────────────────── */
 function CommitDiff({ hash, directory }) {
-  const [diff, setDiff]     = useState('');
+  const [diff, setDiff]       = useState('');
   const [loading, setLoading] = useState(true);
-
   useEffect(() => {
     if (!hash || !directory) return;
     fetch('/api/git/diff', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ directory, commitHash: hash }),
     })
-      .then(r => r.json())
-      .then(d => { setDiff(d.commitDiff || ''); setLoading(false); })
+      .then((r) => r.json())
+      .then((d) => { setDiff(d.commitDiff || ''); setLoading(false); })
       .catch(() => setLoading(false));
   }, [hash, directory]);
 
   if (loading) return <div style={{ padding: 16, color: '#565f89', fontSize: 12 }}>Chargement…</div>;
-  if (!diff) return <div style={{ padding: 16, color: '#565f89', fontSize: 12 }}>Pas de diff disponible</div>;
-
+  if (!diff)   return <div style={{ padding: 16, color: '#565f89', fontSize: 12 }}>Pas de diff disponible</div>;
   return (
-    <pre style={{
-      margin: 0, padding: '8px 12px', fontFamily: 'monospace', fontSize: 11,
-      color: '#c0caf5', whiteSpace: 'pre-wrap', wordBreak: 'break-all', lineHeight: 1.5,
-    }}>
+    <pre style={{ margin: 0, padding: '8px 12px', fontFamily: 'monospace', fontSize: 11, color: '#c0caf5', whiteSpace: 'pre-wrap', wordBreak: 'break-all', lineHeight: 1.5 }}>
       {diff.split('\n').map((line, i) => (
         <span key={i} style={{
           display: 'block',
@@ -92,40 +211,99 @@ function CommitDiff({ hash, directory }) {
           background: line.startsWith('+') && !line.startsWith('+++') ? 'rgba(16,185,129,0.06)'
                     : line.startsWith('-') && !line.startsWith('---') ? 'rgba(239,68,68,0.06)'
                     : 'transparent',
-        }}>
-          {line || ' '}
-        </span>
+        }}>{line || ' '}</span>
       ))}
     </pre>
   );
 }
 
+/* ── Constantes ──────────────────────────────────────────────────── */
+const TOOL_ICON = { Write: '✎', Edit: '✏', MultiEdit: '✏✏', NotebookEdit: '📓' };
+function normPath(p) { return (p || '').replace(/\\/g, '/').toLowerCase(); }
+
+/* ── Boutons d'action Git ────────────────────────────────────────── */
+function FileActions({ file, directory, onDone, confirmDiscard, onConfirmDiscard }) {
+  const [busy, setBusy] = useState(false);
+
+  const run = async (action, extra = {}) => {
+    setBusy(true);
+    try {
+      await fetch(`/api/git/${action}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ directory, filePath: file.path, ...extra }),
+      });
+      onDone();
+    } catch {}
+    setBusy(false);
+  };
+
+  const s = { background: 'none', border: 'none', cursor: busy ? 'not-allowed' : 'pointer', borderRadius: 3, padding: '1px 5px', fontSize: 10, fontWeight: 700, opacity: busy ? 0.5 : 1, transition: 'background 0.1s' };
+  const isDiscarding = confirmDiscard === file.path;
+
+  return (
+    <span style={{ display: 'flex', gap: 2, flexShrink: 0, marginLeft: 4 }} onClick={(e) => e.stopPropagation()}>
+      {/* Stage si non-stagé ou untracked */}
+      {(file.unstaged || file.status === 'untracked') && (
+        <button style={{ ...s, color: '#10b981' }} title="Stager ce fichier" disabled={busy}
+          onClick={() => run('stage')}>+</button>
+      )}
+      {/* Unstage si stagé */}
+      {file.staged && (
+        <button style={{ ...s, color: '#f59e0b' }} title="Unstager ce fichier" disabled={busy}
+          onClick={() => run('unstage')}>−</button>
+      )}
+      {/* Discard — two-step */}
+      {file.status !== 'deleted' && (
+        isDiscarding
+          ? <button style={{ ...s, color: '#fff', background: '#ef4444', padding: '1px 6px' }} disabled={busy}
+              onClick={() => run('discard', { untracked: file.status === 'untracked' })}>
+              Confirmer
+            </button>
+          : <button style={{ ...s, color: '#ef4444' }} title="Annuler les modifications" disabled={busy}
+              onClick={() => onConfirmDiscard(file.path)}>
+              ✕
+            </button>
+      )}
+    </span>
+  );
+}
+
+/* ── Composant principal ─────────────────────────────────────────── */
 export default function GitDiffPanel({ directory, terminalId, onClose }) {
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [data, setData] = useState(null);
+  const [loading, setLoading]     = useState(true);
+  const [error, setError]         = useState(null);
+  const [data, setData]           = useState(null);
   const [selectedFile, setSelectedFile] = useState(null);
+  const [activity, setActivity]       = useState([]);
+  const [viewMode, setViewMode]       = useState('unified'); // 'unified' | 'split'
+  const [fileView, setFileView]       = useState('tree');    // 'list' | 'tree'
+  const [commitMsg, setCommitMsg]     = useState('');
+  const [committing, setCommitting]   = useState(false);
+  const [commitResult, setCommitResult] = useState(null); // 'ok' | 'error'
+  const [stageAllBusy, setStageAllBusy] = useState(false);
+  const [confirmDiscard, setConfirmDiscard] = useState(null); // filepath en attente
+  const refreshTimerRef               = useRef(null);
+
+  // Réinitialiser la confirmation de discard sur clic ailleurs
+  const handleRootClick = useCallback(() => setConfirmDiscard(null), []);
 
   const fetchDiff = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       let res;
-      // Essayer via terminalId d'abord, fallback sur directory si 404
       if (terminalId) {
         res = await fetch(`/api/terminals/${terminalId}/diff`);
         if (!res.ok && directory) {
-          // Terminal plus en mémoire (ex: après redémarrage backend) — utiliser le répertoire
           res = await fetch('/api/git/diff', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ directory }),
           });
         }
       } else if (directory) {
         res = await fetch('/api/git/diff', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ directory }),
         });
       } else {
@@ -139,9 +317,7 @@ export default function GitDiffPanel({ directory, terminalId, onClose }) {
         setData(null);
       } else {
         setData(json);
-        if (json.files?.length > 0 && !selectedFile) {
-          setSelectedFile(json.files[0].path);
-        }
+        if (json.files?.length > 0 && !selectedFile) setSelectedFile(json.files[0].path);
       }
     } catch (err) {
       setError(err.message);
@@ -149,16 +325,84 @@ export default function GitDiffPanel({ directory, terminalId, onClose }) {
     setLoading(false);
   }, [terminalId, directory]);
 
+  const gitOp = useCallback(async (action, body = {}) => {
+    await fetch(`/api/git/${action}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ directory, ...body }),
+    });
+    fetchDiff();
+  }, [directory, fetchDiff]);
+
+  const handleStageAll = async () => {
+    setStageAllBusy(true);
+    await gitOp('stage-all');
+    setStageAllBusy(false);
+  };
+
+  const handleCommit = async () => {
+    if (!commitMsg.trim()) return;
+    setCommitting(true);
+    try {
+      const res = await fetch('/api/git/commit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ directory, message: commitMsg.trim() }),
+      });
+      setCommitResult(res.ok ? 'ok' : 'error');
+      if (res.ok) setCommitMsg('');
+      setTimeout(() => setCommitResult(null), 3000);
+      fetchDiff();
+    } catch { setCommitResult('error'); }
+    setCommitting(false);
+  };
+
   useEffect(() => { fetchDiff(); }, [fetchDiff]);
 
-  // Fichier actuellement sélectionné (exclure les refs de commit __commit__xxx)
-  const isCommitRef = selectedFile?.startsWith('__commit__');
-  const currentFile = !isCommitRef ? data?.files?.find(f => f.path === selectedFile) : null;
-  const hunks = currentFile ? parseDiff(currentFile.diff) : [];
+  // Ecouter file:activity pour auto-refresh + feed live
+  useEffect(() => {
+    const dir = normPath(directory);
+    const handler = (e) => {
+      const { event, data: evData } = e.detail || {};
+      if (event !== 'file:activity') return;
+      const evDir = normPath(evData?.directory);
+      if (!dir || !evDir || (!evDir.startsWith(dir) && !dir.startsWith(evDir))) return;
+      setActivity((prev) => [{
+        id: Date.now() + Math.random(),
+        tool: evData.tool, filePath: evData.filePath,
+        ts: evData.timestamp || new Date().toISOString(),
+      }, ...prev].slice(0, 30));
+      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+      refreshTimerRef.current = setTimeout(() => { refreshTimerRef.current = null; fetchDiff(); }, 2000);
+    };
+    window.addEventListener('ws:message', handler);
+    return () => { window.removeEventListener('ws:message', handler); if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current); };
+  }, [directory, fetchDiff]);
+
+  const isCommitRef  = selectedFile?.startsWith('__commit__');
+  const currentFile  = !isCommitRef ? data?.files?.find((f) => f.path === selectedFile) : null;
+  const hunks        = currentFile ? parseDiff(currentFile.diff) : [];
+  const sbsRows      = viewMode === 'split' ? buildSideBySide(hunks) : [];
+  const fileTree     = data?.files ? buildFileTree(data.files) : null;
+
+  /* ── Légende des couleurs (tree) ── */
+  const legend = (
+    <div style={{ display: 'flex', gap: 8, padding: '4px 10px', borderBottom: '1px solid rgba(45,49,72,0.4)', flexWrap: 'wrap' }}>
+      {[['S', '#10b981', 'Stagé'], ['M', '#f59e0b', 'Modifié'], ['D', '#ef4444', 'Supprimé'], ['?', '#6b7280', 'Non-suivi']].map(([l, c, label]) => (
+        <span key={l} style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 10, color: '#565f89' }}>
+          <span style={{ width: 14, height: 14, borderRadius: 2, background: c + '22', color: c, fontSize: 9, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'monospace' }}>{l}</span>
+          {label}
+        </span>
+      ))}
+    </div>
+  );
+
+  const hasStagedFiles   = data?.files?.some((f) => f.staged) ?? false;
+  const hasUnstagedFiles = data?.files?.some((f) => f.unstaged || f.status === 'untracked') ?? false;
 
   return (
-    <div className="gdp-root">
-      {/* En-tete — fond violet distinctif pour signaler qu'on est en vue Git */}
+    <div className="gdp-root" onClick={handleRootClick}>
+      {/* En-tête */}
       <div className="gdp-header">
         <div className="gdp-header-left">
           <span className="gdp-title">⎇ Git Diff</span>
@@ -172,64 +416,98 @@ export default function GitDiffPanel({ directory, terminalId, onClose }) {
           )}
         </div>
         <div className="gdp-header-right">
-          <button className="gdp-btn gdp-btn-refresh" onClick={fetchDiff} title="Rafraichir" disabled={loading}>
+          {/* Toggle mode diff */}
+          <div className="gdp-toggle-group">
+            <button className={`gdp-toggle ${viewMode === 'unified' ? 'gdp-toggle-active' : ''}`} onClick={() => setViewMode('unified')} title="Vue unifiée">≡</button>
+            <button className={`gdp-toggle ${viewMode === 'split'   ? 'gdp-toggle-active' : ''}`} onClick={() => setViewMode('split')}   title="Vue côte à côte">⊞</button>
+          </div>
+          {/* Toggle vue fichiers */}
+          <div className="gdp-toggle-group">
+            <button className={`gdp-toggle ${fileView === 'list' ? 'gdp-toggle-active' : ''}`} onClick={() => setFileView('list')} title="Liste plate">☰</button>
+            <button className={`gdp-toggle ${fileView === 'tree' ? 'gdp-toggle-active' : ''}`} onClick={() => setFileView('tree')} title="Arbre">⊢</button>
+          </div>
+          <button className="gdp-btn gdp-btn-refresh" onClick={fetchDiff} title="Rafraîchir" disabled={loading}>
             {loading ? '⟳' : '↻'}
           </button>
           {onClose && (
-            <button className="gdp-btn gdp-btn-close" onClick={onClose} title="Retour au terminal (>_)">
-              &gt;_ Retour
-            </button>
+            <button className="gdp-btn gdp-btn-close" onClick={onClose} title="Retour au terminal">&gt;_ Retour</button>
           )}
         </div>
       </div>
 
-      {/* Contenu */}
+      {/* États de chargement / erreur */}
       {loading && (
-        <div className="gdp-center">
-          <span className="gdp-loading-spinner" />
-          <span>Chargement du diff...</span>
-        </div>
+        <div className="gdp-center"><span className="gdp-loading-spinner" /><span>Chargement du diff...</span></div>
       )}
-
       {error && (
         <div className="gdp-center gdp-error-state">
-          <span className="gdp-error-icon">!</span>
-          <span>{error}</span>
+          <span className="gdp-error-icon">!</span><span>{error}</span>
         </div>
       )}
 
       {!loading && !error && data && (
         <>
-          {/* Barre de résumé */}
+          {/* Résumé */}
           <div className="gdp-summary">
-            {data.currentBranch && (
-              <span className="gdp-badge" style={{ background: 'rgba(139,92,246,0.15)', color: '#8b5cf6' }}>
-                ⎇ {data.currentBranch}
-              </span>
-            )}
+            {data.currentBranch && <span className="gdp-badge" style={{ background: 'rgba(139,92,246,0.15)', color: '#8b5cf6' }}>⎇ {data.currentBranch}</span>}
             {data.files?.length === 0 ? (
               <span className="gdp-badge" style={{ background: 'rgba(16,185,129,0.15)', color: '#10b981' }}>✓ Working tree propre</span>
             ) : (
               <>
-                {data.summary?.modified > 0 && <span className="gdp-badge gdp-badge-modified">{data.summary.modified} modifié(s)</span>}
-                {data.summary?.added > 0    && <span className="gdp-badge gdp-badge-added">{data.summary.added} ajouté(s)</span>}
-                {data.summary?.deleted > 0  && <span className="gdp-badge gdp-badge-deleted">{data.summary.deleted} supprimé(s)</span>}
+                {data.summary?.modified  > 0 && <span className="gdp-badge gdp-badge-modified">{data.summary.modified} modifié(s)</span>}
+                {data.summary?.added     > 0 && <span className="gdp-badge gdp-badge-added">{data.summary.added} ajouté(s)</span>}
+                {data.summary?.deleted   > 0 && <span className="gdp-badge gdp-badge-deleted">{data.summary.deleted} supprimé(s)</span>}
                 {data.summary?.untracked > 0 && <span className="gdp-badge gdp-badge-untracked">{data.summary.untracked} non-suivi(s)</span>}
                 <span className="gdp-file-count">{data.files.length} fichier(s)</span>
               </>
             )}
           </div>
 
-          {/* Panneau principal : fichiers à gauche, diff/commits à droite */}
+          {/* Panneau principal */}
           <div className="gdp-main">
-            {/* Colonne gauche : fichiers modifiés + commits */}
+            {/* Colonne gauche : liste + commit panel */}
+            <div className="gdp-left-col">
             <div className="gdp-file-list">
-              {/* Fichiers modifiés */}
+              {/* Feed activité live */}
+              {activity.length > 0 && (
+                <>
+                  <div className="gdp-list-section-title" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#10b981', display: 'inline-block', animation: 'gdp-pulse 1.5s ease-in-out infinite' }} />
+                    Activité live
+                  </div>
+                  {activity.map((a) => {
+                    const fileName = a.filePath ? a.filePath.split(/[/\\]/).pop() : '…';
+                    const age = Math.round((Date.now() - new Date(a.ts).getTime()) / 1000);
+                    return (
+                      <div key={a.id} className="gdp-activity-item">
+                        <span className="gdp-activity-tool">{TOOL_ICON[a.tool] || '?'}</span>
+                        <span className="gdp-activity-file" title={a.filePath}>{fileName}</span>
+                        <span className="gdp-activity-age">{age < 60 ? `${age}s` : `${Math.round(age / 60)}m`}</span>
+                      </div>
+                    );
+                  })}
+                </>
+              )}
+
+              {/* Fichiers modifiés — liste ou arbre */}
               {data.files?.length > 0 && (
                 <>
                   <div className="gdp-list-section-title">Fichiers modifiés</div>
-                  {data.files.map(f => {
-                    const icon = statusIcon(f.status);
+                  {fileView === 'tree' && (
+                    <>
+                      {legend}
+                      <FileTreeNode
+                        name={null}
+                        node={fileTree}
+                        selectedFile={selectedFile}
+                        onSelect={setSelectedFile}
+                        depth={0}
+                      />
+                    </>
+                  )}
+                  {fileView === 'list' && data.files.map((f) => {
+                    const color  = fileColor(f);
+                    const letter = fileStatusLetter(f);
                     const isActive = selectedFile === f.path;
                     return (
                       <div
@@ -238,15 +516,16 @@ export default function GitDiffPanel({ directory, terminalId, onClose }) {
                         onClick={() => setSelectedFile(f.path)}
                         title={f.path}
                       >
-                        <span className="gdp-file-status" style={{ color: icon.color, background: icon.color + '20' }}>
-                          {icon.letter}
-                        </span>
-                        <span className="gdp-file-name">{f.path.split(/[/\\]/).pop()}</span>
+                        <span className="gdp-file-status" style={{ color, background: color + '20' }}>{letter}</span>
+                        <span className="gdp-file-name" style={{ flex: 1 }}>{f.path.split(/[/\\]/).pop()}</span>
+                        <FileActions file={f} directory={directory} onDone={fetchDiff}
+                          confirmDiscard={confirmDiscard} onConfirmDiscard={setConfirmDiscard} />
                       </div>
                     );
                   })}
                 </>
               )}
+
               {/* Commits récents */}
               {data.recentCommits?.length > 0 && (
                 <>
@@ -266,10 +545,43 @@ export default function GitDiffPanel({ directory, terminalId, onClose }) {
                   ))}
                 </>
               )}
+
               {data.files?.length === 0 && !data.recentCommits?.length && (
                 <div className="gdp-center" style={{ padding: 24, fontSize: 12 }}>Aucun historique</div>
               )}
-            </div>
+            </div>{/* fin gdp-file-list */}
+
+            {/* Panneau commit — collé en bas de la colonne gauche */}
+            {data.files?.length > 0 && (
+              <div className="gdp-commit-panel" onClick={(e) => e.stopPropagation()}>
+                {/* Stage All */}
+                {hasUnstagedFiles && (
+                  <button className="gdp-commit-action-btn" disabled={stageAllBusy} onClick={handleStageAll}
+                    style={{ background: 'rgba(16,185,129,0.12)', color: '#10b981', border: '1px solid rgba(16,185,129,0.3)' }}>
+                    {stageAllBusy ? '…' : '+ Stage all'}
+                  </button>
+                )}
+                {/* Message + commit */}
+                <input
+                  className="gdp-commit-input"
+                  placeholder={hasStagedFiles ? 'Message de commit…' : 'Stager des fichiers d\'abord'}
+                  value={commitMsg}
+                  onChange={(e) => setCommitMsg(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleCommit(); } }}
+                  disabled={!hasStagedFiles}
+                />
+                <button className="gdp-commit-action-btn" disabled={!hasStagedFiles || !commitMsg.trim() || committing}
+                  onClick={handleCommit}
+                  style={{
+                    background: hasStagedFiles && commitMsg.trim() ? 'rgba(139,92,246,0.2)' : 'rgba(255,255,255,0.04)',
+                    color: hasStagedFiles && commitMsg.trim() ? '#8b5cf6' : '#565f89',
+                    border: `1px solid ${hasStagedFiles && commitMsg.trim() ? 'rgba(139,92,246,0.4)' : 'transparent'}`,
+                  }}>
+                  {committing ? '…' : commitResult === 'ok' ? '✓ Commité' : commitResult === 'error' ? '✗ Erreur' : '⎇ Commit'}
+                </button>
+              </div>
+            )}
+            </div>{/* fin gdp-left-col */}
 
             {/* Vue du diff */}
             <div className="gdp-diff-view">
@@ -279,30 +591,65 @@ export default function GitDiffPanel({ directory, terminalId, onClose }) {
                   <span>Sélectionnez un fichier ou un commit</span>
                 </div>
               )}
-              {selectedFile && !selectedFile.startsWith('__commit__') && hunks.length === 0 && (
-                <div className="gdp-center" style={{ color: '#565f89' }}>Pas de diff pour ce fichier</div>
-              )}
-              {selectedFile && !selectedFile.startsWith('__commit__') && hunks.length > 0 && (
-                <div className="gdp-diff-content">
-                  <div className="gdp-diff-file-header">{selectedFile}</div>
-                  {hunks.map((hunk, hi) => (
-                    <div key={hi} className="gdp-hunk">
-                      <div className="gdp-hunk-header">{hunk.header}</div>
-                      {hunk.lines.map((line, li) => (
-                        <div key={li} className={`gdp-diff-line gdp-line-${line.type}`}>
-                          <span className="gdp-line-num gdp-line-num-old">{line.oldNum ?? ''}</span>
-                          <span className="gdp-line-num gdp-line-num-new">{line.newNum ?? ''}</span>
-                          <span className="gdp-line-sign">{line.type === 'add' ? '+' : line.type === 'del' ? '-' : ' '}</span>
-                          <span className="gdp-line-content">{line.content}</span>
+
+              {/* Diff unifié */}
+              {selectedFile && !isCommitRef && viewMode === 'unified' && (
+                hunks.length === 0
+                  ? <div className="gdp-center" style={{ color: '#565f89' }}>Pas de diff pour ce fichier</div>
+                  : <div className="gdp-diff-content">
+                      <div className="gdp-diff-file-header">{selectedFile}</div>
+                      {hunks.map((hunk, hi) => (
+                        <div key={hi} className="gdp-hunk">
+                          <div className="gdp-hunk-header">{hunk.header}</div>
+                          {hunk.lines.map((line, li) => (
+                            <div key={li} className={`gdp-diff-line gdp-line-${line.type}`}>
+                              <span className="gdp-line-num">{line.oldNum ?? ''}</span>
+                              <span className="gdp-line-num">{line.newNum ?? ''}</span>
+                              <span className="gdp-line-sign">{line.type === 'add' ? '+' : line.type === 'del' ? '-' : ' '}</span>
+                              <span className="gdp-line-content">{line.content}</span>
+                            </div>
+                          ))}
                         </div>
                       ))}
                     </div>
-                  ))}
-                </div>
               )}
-              {selectedFile?.startsWith('__commit__') && (() => {
-                const hash = selectedFile.replace('__commit__', '');
-                const commit = data.recentCommits?.find(c => c.hash === hash);
+
+              {/* Diff côte à côte */}
+              {selectedFile && !isCommitRef && viewMode === 'split' && (
+                sbsRows.length === 0
+                  ? <div className="gdp-center" style={{ color: '#565f89' }}>Pas de diff pour ce fichier</div>
+                  : <div className="gdp-sbs-root">
+                      <div className="gdp-sbs-header">
+                        <div className="gdp-sbs-col-header">Avant</div>
+                        <div className="gdp-sbs-col-header">Après</div>
+                      </div>
+                      <div className="gdp-sbs-body">
+                        {sbsRows.map((row, i) =>
+                          row.isHeader ? (
+                            <div key={i} className="gdp-sbs-hunk-header">{row.header}</div>
+                          ) : (
+                            <div key={i} className="gdp-sbs-row">
+                              {/* Côté gauche (ancien) */}
+                              <div className={`gdp-sbs-cell gdp-sbs-${row.left.type}`}>
+                                <span className="gdp-sbs-num">{row.left.num ?? ''}</span>
+                                <span className="gdp-sbs-line">{row.left.content}</span>
+                              </div>
+                              {/* Côté droit (nouveau) */}
+                              <div className={`gdp-sbs-cell gdp-sbs-${row.right.type}`}>
+                                <span className="gdp-sbs-num">{row.right.num ?? ''}</span>
+                                <span className="gdp-sbs-line">{row.right.content}</span>
+                              </div>
+                            </div>
+                          )
+                        )}
+                      </div>
+                    </div>
+              )}
+
+              {/* Diff commit */}
+              {isCommitRef && (() => {
+                const hash   = selectedFile.replace('__commit__', '');
+                const commit = data.recentCommits?.find((c) => c.hash === hash);
                 return (
                   <div className="gdp-diff-content">
                     <div className="gdp-diff-file-header" style={{ display: 'flex', gap: 10 }}>
@@ -320,308 +667,134 @@ export default function GitDiffPanel({ directory, terminalId, onClose }) {
 
       <style>{`
         .gdp-root {
-          display: flex;
-          flex-direction: column;
-          height: 100%;
-          background: #1a1b26;
-          color: #c0caf5;
+          display: flex; flex-direction: column; height: 100%;
+          background: #1a1b26; color: #c0caf5;
           font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
         }
 
-        /* En-tete */
+        /* En-tête */
         .gdp-header {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
+          display: flex; justify-content: space-between; align-items: center;
           padding: 8px 12px;
-          background: rgba(139, 92, 246, 0.12);
-          border-bottom: 2px solid rgba(139, 92, 246, 0.4);
-          flex-shrink: 0;
+          background: rgba(139,92,246,0.12);
+          border-bottom: 2px solid rgba(139,92,246,0.4);
+          flex-shrink: 0; gap: 8px;
         }
-        .gdp-header-left {
-          display: flex;
-          align-items: center;
-          gap: 10px;
-          overflow: hidden;
+        .gdp-header-left  { display: flex; align-items: center; gap: 10px; overflow: hidden; flex: 1; min-width: 0; }
+        .gdp-header-right { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
+        .gdp-title    { font-size: 13px; font-weight: 700; color: #8b5cf6; flex-shrink: 0; }
+        .gdp-directory { font-size: 12px; color: #565f89; font-family: monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+        /* Boutons toggle (unified/split, list/tree) */
+        .gdp-toggle-group { display: flex; border: 1px solid #2d3148; border-radius: 5px; overflow: hidden; }
+        .gdp-toggle {
+          background: none; border: none; border-right: 1px solid #2d3148;
+          padding: 3px 8px; cursor: pointer; color: #565f89; font-size: 13px;
+          transition: background 0.15s, color 0.15s;
         }
-        .gdp-title {
-          font-size: 13px;
-          font-weight: 700;
-          color: var(--accent, #8b5cf6);
-          flex-shrink: 0;
-        }
-        .gdp-directory {
-          font-size: 12px;
-          color: #565f89;
-          font-family: monospace;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-        }
-        .gdp-header-right {
-          display: flex;
-          gap: 6px;
-          flex-shrink: 0;
-        }
+        .gdp-toggle:last-child { border-right: none; }
+        .gdp-toggle:hover { background: rgba(255,255,255,0.06); color: #c0caf5; }
+        .gdp-toggle-active { background: rgba(139,92,246,0.2) !important; color: #8b5cf6 !important; }
+
         .gdp-btn {
-          background: none;
-          border: 1px solid var(--border, #2d3148);
-          border-radius: 4px;
-          padding: 2px 8px;
-          cursor: pointer;
-          color: #c0caf5;
-          font-size: 14px;
+          background: none; border: 1px solid #2d3148; border-radius: 4px;
+          padding: 2px 8px; cursor: pointer; color: #c0caf5; font-size: 14px;
           transition: background 0.15s;
         }
         .gdp-btn:hover { background: rgba(255,255,255,0.08); }
         .gdp-btn-refresh { font-size: 16px; }
-        .gdp-btn-close { color: #ef4444; }
+        .gdp-btn-close { color: #ef4444; font-size: 11px; }
 
-        /* Etats centraux */
-        .gdp-center {
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          gap: 10px;
-          flex: 1;
-          padding: 32px;
-          color: #565f89;
-          font-size: 14px;
-        }
-        .gdp-loading-spinner {
-          width: 18px; height: 18px;
-          border: 2px solid rgba(139,92,246,0.3);
-          border-top-color: var(--accent, #8b5cf6);
-          border-radius: 50%;
-          animation: gdp-spin 0.8s linear infinite;
-        }
+        /* États centraux */
+        .gdp-center { display: flex; align-items: center; justify-content: center; gap: 10px; flex: 1; padding: 32px; color: #565f89; font-size: 14px; }
+        .gdp-loading-spinner { width: 18px; height: 18px; border: 2px solid rgba(139,92,246,0.3); border-top-color: #8b5cf6; border-radius: 50%; animation: gdp-spin 0.8s linear infinite; }
         @keyframes gdp-spin { to { transform: rotate(360deg); } }
         .gdp-error-state { color: #ef4444; }
-        .gdp-error-icon {
-          width: 24px; height: 24px;
-          border-radius: 50%;
-          background: rgba(239,68,68,0.15);
-          color: #ef4444;
-          display: flex; align-items: center; justify-content: center;
-          font-weight: 700; font-size: 14px;
-        }
-        .gdp-clean-state { color: #10b981; }
-        .gdp-clean-icon {
-          width: 24px; height: 24px;
-          border-radius: 50%;
-          background: rgba(16,185,129,0.15);
-          color: #10b981;
-          display: flex; align-items: center; justify-content: center;
-          font-weight: 700; font-size: 14px;
-        }
+        .gdp-error-icon { width: 24px; height: 24px; border-radius: 50%; background: rgba(239,68,68,0.15); color: #ef4444; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 14px; }
 
-        /* Barre de resume */
-        .gdp-summary {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          padding: 6px 12px;
-          background: rgba(255,255,255,0.02);
-          border-bottom: 1px solid var(--border, #2d3148);
-          flex-shrink: 0;
-          flex-wrap: wrap;
-        }
-        .gdp-badge {
-          font-size: 11px;
-          font-weight: 600;
-          padding: 2px 8px;
-          border-radius: 10px;
-        }
-        .gdp-badge-modified { background: rgba(59,130,246,0.15); color: #3b82f6; }
-        .gdp-badge-added { background: rgba(16,185,129,0.15); color: #10b981; }
-        .gdp-badge-deleted { background: rgba(239,68,68,0.15); color: #ef4444; }
-        .gdp-badge-untracked { background: rgba(107,114,128,0.15); color: #6b7280; }
-        .gdp-file-count {
-          margin-left: auto;
-          font-size: 11px;
-          color: #565f89;
-        }
+        /* Résumé */
+        .gdp-summary { display: flex; align-items: center; gap: 8px; padding: 6px 12px; background: rgba(255,255,255,0.02); border-bottom: 1px solid #2d3148; flex-shrink: 0; flex-wrap: wrap; }
+        .gdp-badge { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 10px; }
+        .gdp-badge-modified  { background: rgba(245,158,11,0.15);  color: #f59e0b; }
+        .gdp-badge-added     { background: rgba(16,185,129,0.15);   color: #10b981; }
+        .gdp-badge-deleted   { background: rgba(239,68,68,0.15);    color: #ef4444; }
+        .gdp-badge-untracked { background: rgba(107,114,128,0.15);  color: #6b7280; }
+        .gdp-file-count { margin-left: auto; font-size: 11px; color: #565f89; }
 
         /* Panneau principal */
-        .gdp-main {
-          display: flex;
-          flex: 1;
-          min-height: 0;
-          overflow: hidden;
-        }
+        .gdp-main { display: flex; flex: 1; min-height: 0; overflow: hidden; }
 
-        /* Liste des fichiers + commits */
-        .gdp-list-section-title {
-          padding: 6px 10px 4px;
-          font-size: 10px;
-          font-weight: 700;
-          text-transform: uppercase;
-          letter-spacing: 0.5px;
-          color: #565f89;
-          background: rgba(255,255,255,0.02);
-          border-bottom: 1px solid rgba(45,49,72,0.5);
-        }
-        .gdp-commit-item {
-          display: flex;
-          flex-direction: column;
-          gap: 2px;
-          padding: 6px 10px;
-          cursor: pointer;
-          border-bottom: 1px solid rgba(45,49,72,0.5);
-          transition: background 0.1s;
-          overflow: hidden;
-        }
-        .gdp-commit-item:hover { background: rgba(255,255,255,0.04); }
-        .gdp-commit-hash { font-size: 10px; color: #8b5cf6; font-family: monospace; flex-shrink: 0; }
-        .gdp-commit-msg { font-size: 11px; color: #9ca3af; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        /* Colonne gauche : wrapper + liste scrollable + commit panel */
+        .gdp-left-col { display: flex; flex-direction: column; width: 220px; min-width: 180px; border-right: 1px solid #2d3148; flex-shrink: 0; min-height: 0; }
+        .gdp-file-list { flex: 1; overflow-y: auto; min-height: 0; }
 
-        .gdp-file-list {
-          width: 240px;
-          min-width: 200px;
-          border-right: 1px solid var(--border, #2d3148);
-          overflow-y: auto;
-          flex-shrink: 0;
-        }
-        .gdp-file-item {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          padding: 6px 10px;
-          cursor: pointer;
-          border-bottom: 1px solid rgba(45,49,72,0.5);
-          transition: background 0.1s;
-          overflow: hidden;
-        }
+        /* Panneau commit */
+        .gdp-commit-panel { flex-shrink: 0; display: flex; flex-direction: column; gap: 5px; padding: 8px; border-top: 1px solid rgba(139,92,246,0.25); background: rgba(139,92,246,0.04); }
+        .gdp-commit-input { background: #1a1b26; border: 1px solid #2d3148; border-radius: 5px; color: #c0caf5; font-size: 11px; padding: 5px 8px; font-family: monospace; outline: none; width: 100%; box-sizing: border-box; }
+        .gdp-commit-input:focus { border-color: rgba(139,92,246,0.5); }
+        .gdp-commit-input:disabled { opacity: 0.4; cursor: not-allowed; }
+        .gdp-commit-action-btn { border-radius: 5px; padding: 4px 8px; font-size: 11px; font-weight: 600; cursor: pointer; border: none; width: 100%; text-align: center; transition: opacity 0.15s; }
+        .gdp-commit-action-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+        .gdp-list-section-title { padding: 6px 10px 4px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #565f89; background: rgba(255,255,255,0.02); border-bottom: 1px solid rgba(45,49,72,0.5); }
+        .gdp-file-item { display: flex; align-items: center; gap: 8px; padding: 6px 10px; cursor: pointer; border-bottom: 1px solid rgba(45,49,72,0.5); transition: background 0.1s; overflow: hidden; }
         .gdp-file-item:hover { background: rgba(255,255,255,0.04); }
-        .gdp-file-active { background: rgba(139,92,246,0.1) !important; border-left: 2px solid var(--accent, #8b5cf6); }
-        .gdp-file-status {
-          flex-shrink: 0;
-          width: 18px; height: 18px;
-          display: flex; align-items: center; justify-content: center;
-          border-radius: 3px;
-          font-size: 11px;
-          font-weight: 700;
-          font-family: monospace;
-        }
-        .gdp-file-name {
-          font-size: 12px;
-          color: #c0caf5;
-          font-family: monospace;
-          white-space: nowrap;
-          overflow: hidden;
-          text-overflow: ellipsis;
-        }
-        .gdp-file-path {
-          font-size: 10px;
-          color: #565f89;
-          font-family: monospace;
-          white-space: nowrap;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          margin-left: auto;
-        }
+        .gdp-file-active { background: rgba(139,92,246,0.1) !important; border-left: 2px solid #8b5cf6; }
+        .gdp-file-status { flex-shrink: 0; width: 16px; height: 16px; display: flex; align-items: center; justify-content: center; border-radius: 3px; font-size: 10px; font-weight: 700; font-family: monospace; }
+        .gdp-file-name { font-size: 11px; color: #c0caf5; font-family: monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .gdp-commit-item { display: flex; flex-direction: column; gap: 2px; padding: 6px 10px; cursor: pointer; border-bottom: 1px solid rgba(45,49,72,0.5); transition: background 0.1s; overflow: hidden; }
+        .gdp-commit-item:hover { background: rgba(255,255,255,0.04); }
+        .gdp-commit-hash { font-size: 10px; color: #8b5cf6; font-family: monospace; }
+        .gdp-commit-msg  { font-size: 11px; color: #9ca3af; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-        /* Vue du diff */
-        .gdp-diff-view {
-          flex: 1;
-          overflow: auto;
-          min-width: 0;
-        }
-        .gdp-diff-content {
-          font-family: 'Cascadia Code', 'Fira Code', Consolas, monospace;
-          font-size: 12px;
-          line-height: 1.5;
-        }
-        .gdp-diff-file-header {
-          padding: 6px 12px;
-          background: rgba(139,92,246,0.08);
-          color: var(--accent, #8b5cf6);
-          font-weight: 600;
-          font-size: 12px;
-          font-family: monospace;
-          position: sticky;
-          top: 0;
-          z-index: 1;
-          border-bottom: 1px solid var(--border, #2d3148);
-        }
+        /* Activité live */
+        .gdp-activity-item { display: flex; align-items: center; gap: 6px; padding: 4px 10px; border-bottom: 1px solid rgba(45,49,72,0.4); font-size: 11px; animation: gdp-fadein 0.3s ease; }
+        @keyframes gdp-fadein { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+        @keyframes gdp-pulse  { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+        .gdp-activity-tool { flex-shrink: 0; font-size: 12px; color: #f59e0b; }
+        .gdp-activity-file { flex: 1; color: #c0caf5; font-family: monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .gdp-activity-age  { flex-shrink: 0; color: #565f89; font-size: 10px; }
+
+        /* Vue du diff — commune */
+        .gdp-diff-view { flex: 1; overflow: auto; min-width: 0; }
+        .gdp-diff-content { font-family: 'Cascadia Code','Fira Code',Consolas,monospace; font-size: 12px; line-height: 1.5; }
+        .gdp-diff-file-header { padding: 6px 12px; background: rgba(139,92,246,0.08); color: #8b5cf6; font-weight: 600; font-size: 12px; font-family: monospace; position: sticky; top: 0; z-index: 1; border-bottom: 1px solid #2d3148; }
         .gdp-hunk { margin-bottom: 2px; }
-        .gdp-hunk-header {
-          padding: 4px 12px;
-          background: rgba(139,92,246,0.06);
-          color: var(--accent, #8b5cf6);
-          font-size: 11px;
-          font-family: monospace;
-          border-top: 1px solid rgba(45,49,72,0.5);
-          border-bottom: 1px solid rgba(45,49,72,0.3);
-          user-select: none;
-        }
-
-        /* Lignes de diff */
-        .gdp-diff-line {
-          display: flex;
-          white-space: pre;
-          min-height: 18px;
-        }
-        .gdp-line-num {
-          display: inline-block;
-          width: 44px;
-          text-align: right;
-          padding-right: 8px;
-          color: #565f89;
-          font-size: 11px;
-          user-select: none;
-          flex-shrink: 0;
-        }
-        .gdp-line-sign {
-          display: inline-block;
-          width: 14px;
-          text-align: center;
-          flex-shrink: 0;
-          user-select: none;
-        }
-        .gdp-line-content {
-          flex: 1;
-          overflow-x: auto;
-          padding-right: 12px;
-        }
-
-        /* Couleurs des lignes */
-        .gdp-line-add {
-          background: rgba(16,185,129,0.08);
-          color: #4ade80;
-        }
+        .gdp-hunk-header { padding: 4px 12px; background: rgba(139,92,246,0.06); color: #8b5cf6; font-size: 11px; font-family: monospace; border-top: 1px solid rgba(45,49,72,0.5); border-bottom: 1px solid rgba(45,49,72,0.3); user-select: none; }
+        .gdp-diff-line { display: flex; white-space: pre; min-height: 18px; }
+        .gdp-line-num  { display: inline-block; width: 44px; text-align: right; padding-right: 8px; color: #565f89; font-size: 11px; user-select: none; flex-shrink: 0; }
+        .gdp-line-sign { display: inline-block; width: 14px; text-align: center; flex-shrink: 0; user-select: none; }
+        .gdp-line-content { flex: 1; overflow-x: auto; padding-right: 12px; }
+        .gdp-line-add { background: rgba(16,185,129,0.08); color: #4ade80; }
         .gdp-line-add .gdp-line-sign { color: #10b981; }
-        .gdp-line-add .gdp-line-num { color: #10b981; opacity: 0.6; }
-
-        .gdp-line-del {
-          background: rgba(239,68,68,0.08);
-          color: #f87171;
-        }
+        .gdp-line-add .gdp-line-num  { color: #10b981; opacity: 0.6; }
+        .gdp-line-del { background: rgba(239,68,68,0.08); color: #f87171; }
         .gdp-line-del .gdp-line-sign { color: #ef4444; }
-        .gdp-line-del .gdp-line-num { color: #ef4444; opacity: 0.6; }
+        .gdp-line-del .gdp-line-num  { color: #ef4444; opacity: 0.6; }
+        .gdp-line-ctx { color: #9ca3af; }
 
-        .gdp-line-ctx {
-          color: #9ca3af;
-        }
+        /* Vue côte à côte */
+        .gdp-sbs-root  { display: flex; flex-direction: column; height: 100%; font-family: 'Cascadia Code','Fira Code',Consolas,monospace; font-size: 12px; line-height: 1.5; }
+        .gdp-sbs-header { display: flex; flex-shrink: 0; border-bottom: 1px solid #2d3148; }
+        .gdp-sbs-col-header { flex: 1; padding: 4px 10px; font-size: 11px; font-weight: 700; color: #565f89; background: rgba(255,255,255,0.02); text-align: center; }
+        .gdp-sbs-col-header:first-child { border-right: 1px solid #2d3148; }
+        .gdp-sbs-body { flex: 1; overflow: auto; }
+        .gdp-sbs-hunk-header { padding: 3px 12px; background: rgba(139,92,246,0.06); color: #8b5cf6; font-size: 11px; border-top: 1px solid rgba(45,49,72,0.5); border-bottom: 1px solid rgba(45,49,72,0.3); user-select: none; }
+        .gdp-sbs-row  { display: flex; min-height: 18px; border-bottom: 1px solid rgba(45,49,72,0.2); }
+        .gdp-sbs-cell { display: flex; flex: 1; min-width: 0; white-space: pre; overflow: hidden; }
+        .gdp-sbs-cell:first-child { border-right: 1px solid rgba(45,49,72,0.6); }
+        .gdp-sbs-num  { display: inline-block; width: 40px; text-align: right; padding-right: 6px; color: #565f89; font-size: 11px; user-select: none; flex-shrink: 0; }
+        .gdp-sbs-line { flex: 1; padding-right: 8px; overflow: hidden; }
+        .gdp-sbs-del   { background: rgba(239,68,68,0.1);  color: #f87171; }
+        .gdp-sbs-del .gdp-sbs-num { color: #ef4444; opacity: 0.6; }
+        .gdp-sbs-add   { background: rgba(16,185,129,0.1); color: #4ade80; }
+        .gdp-sbs-add .gdp-sbs-num { color: #10b981; opacity: 0.6; }
+        .gdp-sbs-ctx   { color: #9ca3af; }
+        .gdp-sbs-empty { background: rgba(255,255,255,0.01); }
 
-        /* Scrollbar personnalisee */
-        .gdp-file-list::-webkit-scrollbar,
-        .gdp-diff-view::-webkit-scrollbar {
-          width: 6px;
-        }
-        .gdp-file-list::-webkit-scrollbar-track,
-        .gdp-diff-view::-webkit-scrollbar-track {
-          background: transparent;
-        }
-        .gdp-file-list::-webkit-scrollbar-thumb,
-        .gdp-diff-view::-webkit-scrollbar-thumb {
-          background: rgba(139,92,246,0.3);
-          border-radius: 3px;
-        }
-        .gdp-file-list::-webkit-scrollbar-thumb:hover,
-        .gdp-diff-view::-webkit-scrollbar-thumb:hover {
-          background: rgba(139,92,246,0.5);
-        }
+        /* Scrollbars */
+        .gdp-file-list::-webkit-scrollbar, .gdp-diff-view::-webkit-scrollbar, .gdp-sbs-body::-webkit-scrollbar { width: 6px; height: 6px; }
+        .gdp-file-list::-webkit-scrollbar-track, .gdp-diff-view::-webkit-scrollbar-track, .gdp-sbs-body::-webkit-scrollbar-track { background: transparent; }
+        .gdp-file-list::-webkit-scrollbar-thumb, .gdp-diff-view::-webkit-scrollbar-thumb, .gdp-sbs-body::-webkit-scrollbar-thumb { background: rgba(139,92,246,0.3); border-radius: 3px; }
       `}</style>
     </div>
   );

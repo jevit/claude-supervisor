@@ -3,7 +3,7 @@ const cors = require('cors');
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { WebSocketServer } = require('ws');
+const { WebSocketServer, WebSocket } = require('ws');
 require('dotenv').config();
 
 const taskRoutes = require('./routes/tasks');
@@ -75,7 +75,7 @@ const CONFLICT_TRIGGER_EVENTS = new Set([
 function broadcast(event, data) {
   const message = JSON.stringify({ event, data, timestamp: new Date().toISOString() });
   wss.clients.forEach((client) => {
-    if (client.readyState === 1) {
+    if (client.readyState === WebSocket.OPEN) {
       client.send(message);
     }
   });
@@ -108,6 +108,8 @@ const approvalRules = new ApprovalRules(store);
 // Initialiser le gestionnaire de terminaux (node-pty)
 // sharedContext est passe pour injecter le contexte dans le prompt au spawn
 const terminalManager = new TerminalManager(tracker, broadcast, store, sharedContext);
+// Restaurer les sessions interrompues depuis le store
+terminalManager.loadPersistedSessions();
 
 // Initialiser le gestionnaire de worktrees git
 const repoRoot      = path.resolve(__dirname, '../../');
@@ -122,6 +124,7 @@ const squadTemplates = new SquadTemplates(store);
 // Initialiser le protocole WebSocket
 const wsProtocol = new WsProtocol(wss, tracker, broadcast, { lockManager, messageBus, approvalRules });
 
+app.locals.broadcast  = broadcast;
 app.locals.supervisor = supervisor;
 app.locals.tracker = tracker;
 app.locals.settings = settings;
@@ -170,11 +173,18 @@ app.get('/api/settings', (req, res) => {
   res.json(settings);
 });
 
+// Nettoyage periodique des sessions inactives (toutes les 60s)
+let _staleCheckTimer = setInterval(() => {
+  tracker.cleanupStale(120000); // 2 min sans mise a jour = stale
+}, 60000);
+
 // Sauvegarder les donnees avant l'arret
 function gracefulShutdown() {
   console.log('Sauvegarde des donnees avant arret...');
   clearInterval(_staleCheckTimer);
+  _staleCheckTimer = null;
   squadManager.destroy();
+  terminalManager.persistState(); // Sauvegarder les sessions actives avant de les tuer
   terminalManager.destroyAll();
   healthChecker.destroy();
   envWatcher.destroy();
@@ -183,11 +193,6 @@ function gracefulShutdown() {
 }
 process.on('SIGINT', gracefulShutdown);
 process.on('SIGTERM', gracefulShutdown);
-
-// Nettoyage periodique des sessions inactives (toutes les 60s)
-const _staleCheckTimer = setInterval(() => {
-  tracker.cleanupStale(120000); // 2 min sans mise a jour = stale
-}, 60000);
 
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {

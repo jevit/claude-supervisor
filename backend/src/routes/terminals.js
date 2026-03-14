@@ -1,7 +1,5 @@
 const express = require('express');
-const { execFile } = require('child_process');
-const { promisify } = require('util');
-const execFileAsync = promisify(execFile);
+const { runGit, getFullDiff } = require('../services/git-utils');
 const router = express.Router();
 
 // Verifier si node-pty est disponible
@@ -71,6 +69,20 @@ router.post('/:id/resize', (req, res) => {
 });
 
 // Nettoyer les terminaux termines
+// Reprendre une session fantome (ghost)
+router.post('/:id/resume', (req, res) => {
+  const terminalManager = req.app.locals.terminalManager;
+  if (!terminalManager.isAvailable()) {
+    return res.status(503).json({ error: 'node-pty non disponible' });
+  }
+  try {
+    const result = terminalManager.resume(req.params.id);
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 router.post('/cleanup', (req, res) => {
   const terminalManager = req.app.locals.terminalManager;
   const tracker = req.app.locals.tracker;
@@ -103,77 +115,6 @@ router.delete('/:id', (req, res) => {
   if (!success) return res.status(404).json({ error: 'Terminal non trouve' });
   res.json({ success: true });
 });
-
-// --- Utilitaire interne pour executer git dans un repertoire ---
-async function runGit(args, cwd) {
-  try {
-    const { stdout } = await execFileAsync('git', args, { cwd, maxBuffer: 10 * 1024 * 1024 });
-    return stdout;
-  } catch (err) {
-    // Si git retourne un code non-zero mais a quand meme une sortie
-    if (err.stdout !== undefined) return err.stdout;
-    throw err;
-  }
-}
-
-// Parser la sortie de git status --porcelain
-function parseStatus(raw) {
-  const files = [];
-  const summary = { modified: 0, added: 0, deleted: 0, untracked: 0 };
-  for (const line of raw.split('\n')) {
-    if (!line.trim()) continue;
-    const xy = line.substring(0, 2);
-    const filePath = line.substring(3);
-    let status = 'modified';
-    if (xy.includes('?')) { status = 'untracked'; summary.untracked++; }
-    else if (xy.includes('A')) { status = 'added'; summary.added++; }
-    else if (xy.includes('D')) { status = 'deleted'; summary.deleted++; }
-    else { summary.modified++; }
-    files.push({ path: filePath, status });
-  }
-  return { files, summary };
-}
-
-// Obtenir le diff complet d'un repertoire
-async function getFullDiff(directory) {
-  const [statusRaw, diffUnstaged, diffStaged] = await Promise.all([
-    runGit(['status', '--porcelain'], directory),
-    runGit(['diff'], directory),
-    runGit(['diff', '--cached'], directory),
-  ]);
-  const { files, summary } = parseStatus(statusRaw);
-
-  // Combiner les diffs
-  const combinedDiff = [diffUnstaged, diffStaged].filter(Boolean).join('\n');
-
-  // Attacher le diff individuel a chaque fichier
-  for (const f of files) {
-    try {
-      if (f.status === 'untracked') {
-        f.diff = await runGit(['diff', '--no-index', 'NUL', f.path], directory).catch(() => '');
-      } else {
-        const fileDiff = await runGit(['diff', 'HEAD', '--', f.path], directory);
-        f.diff = fileDiff || await runGit(['diff', '--cached', '--', f.path], directory);
-      }
-    } catch {
-      f.diff = '';
-    }
-  }
-
-  // Derniers commits pour contexte (branch, historique)
-  let recentCommits = [];
-  let currentBranch = '';
-  try {
-    const logRaw = await runGit(['log', '--oneline', '-10', '--decorate'], directory);
-    recentCommits = logRaw.split('\n').filter(Boolean).map((line) => {
-      const [hash, ...rest] = line.split(' ');
-      return { hash, message: rest.join(' ') };
-    });
-    currentBranch = (await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], directory)).trim();
-  } catch {}
-
-  return { files, summary, combinedDiff, recentCommits, currentBranch };
-}
 
 // Git diff pour un terminal specifique
 router.get('/:id/diff', async (req, res) => {

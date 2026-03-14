@@ -117,6 +117,13 @@ class TerminalTracker {
   }
 
   /**
+   * Retourne une session par son ID (acces direct O(1)).
+   */
+  getSession(sessionId) {
+    return this.sessions.get(sessionId) || null;
+  }
+
+  /**
    * Retourne une vue normalisee d'une session pour le broadcast.
    */
   _normalize(session) {

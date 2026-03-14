@@ -1,36 +1,6 @@
 const express = require('express');
-const { execFile } = require('child_process');
-const { promisify } = require('util');
-const execFileAsync = promisify(execFile);
+const { runGit, parseGitStatus } = require('../services/git-utils');
 const router = express.Router();
-
-// --- Utilitaire pour executer git dans un repertoire ---
-async function runGitCmd(args, cwd) {
-  try {
-    const { stdout } = await execFileAsync('git', args, { cwd, maxBuffer: 10 * 1024 * 1024 });
-    return stdout;
-  } catch (err) {
-    if (err.stdout !== undefined) return err.stdout;
-    throw err;
-  }
-}
-
-function parseGitStatus(raw) {
-  const files = [];
-  const summary = { modified: 0, added: 0, deleted: 0, untracked: 0 };
-  for (const line of raw.split('\n')) {
-    if (!line.trim()) continue;
-    const xy = line.substring(0, 2);
-    const filePath = line.substring(3);
-    let status = 'modified';
-    if (xy.includes('?')) { status = 'untracked'; summary.untracked++; }
-    else if (xy.includes('A')) { status = 'added'; summary.added++; }
-    else if (xy.includes('D')) { status = 'deleted'; summary.deleted++; }
-    else { summary.modified++; }
-    files.push({ path: filePath, status });
-  }
-  return { files, summary };
-}
 
 // Diff generique pour n'importe quel repertoire
 router.post('/diff', async (req, res) => {
@@ -40,7 +10,7 @@ router.post('/diff', async (req, res) => {
   // Si un hash de commit est fourni, retourner le diff de ce commit uniquement
   if (commitHash) {
     try {
-      const commitDiff = await runGitCmd(['show', '--stat', '--patch', commitHash], directory);
+      const commitDiff = await runGit(['show', '--stat', '--patch', commitHash], directory);
       return res.json({ commitDiff });
     } catch (err) {
       return res.status(500).json({ error: err.message });
@@ -48,9 +18,9 @@ router.post('/diff', async (req, res) => {
   }
   try {
     const [statusRaw, diffUnstaged, diffStaged] = await Promise.all([
-      runGitCmd(['status', '--porcelain'], directory),
-      runGitCmd(['diff'], directory),
-      runGitCmd(['diff', '--cached'], directory),
+      runGit(['status', '--porcelain'], directory),
+      runGit(['diff'], directory),
+      runGit(['diff', '--cached'], directory),
     ]);
     const { files, summary } = parseGitStatus(statusRaw);
     const combinedDiff = [diffUnstaged, diffStaged].filter(Boolean).join('\n');
@@ -60,20 +30,20 @@ router.post('/diff', async (req, res) => {
         if (f.status === 'untracked') {
           // /dev/null ne fonctionne pas sur Windows — afficher le contenu du fichier
           try {
-            f.diff = await runGitCmd(['diff', '--no-index', 'NUL', f.path], directory);
+            f.diff = await runGit(['diff', '--no-index', 'NUL', f.path], directory);
           } catch {
-            f.diff = await runGitCmd(['show', `:${f.path}`], directory).catch(() => '');
+            f.diff = await runGit(['show', `:${f.path}`], directory).catch(() => '');
           }
         } else {
-          f.diff = await runGitCmd(['diff', 'HEAD', '--', f.path], directory);
-          if (!f.diff) f.diff = await runGitCmd(['diff', '--cached', '--', f.path], directory);
+          f.diff = await runGit(['diff', 'HEAD', '--', f.path], directory);
+          if (!f.diff) f.diff = await runGit(['diff', '--cached', '--', f.path], directory);
         }
       } catch { f.diff = ''; }
     }
     // Derniers commits pour contexte (affichés même si working tree propre)
     let recentCommits = [];
     try {
-      const logRaw = await runGitCmd(['log', '--oneline', '-8', '--decorate'], directory);
+      const logRaw = await runGit(['log', '--oneline', '-8', '--decorate'], directory);
       recentCommits = logRaw.split('\n').filter(Boolean).map((line) => {
         const [hash, ...rest] = line.split(' ');
         return { hash, message: rest.join(' ') };
@@ -86,6 +56,107 @@ router.post('/diff', async (req, res) => {
     }
     res.status(500).json({ error: err.message });
   }
+});
+
+// Stage un fichier
+router.post('/stage', async (req, res) => {
+  const { directory, filePath } = req.body;
+  if (!directory || !filePath) return res.status(400).json({ error: 'directory and filePath required' });
+  try {
+    await runGit(['add', '--', filePath], directory);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Stage tous les fichiers modifies
+router.post('/stage-all', async (req, res) => {
+  const { directory } = req.body;
+  if (!directory) return res.status(400).json({ error: 'directory required' });
+  try {
+    await runGit(['add', '-A'], directory);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Unstage un fichier
+router.post('/unstage', async (req, res) => {
+  const { directory, filePath } = req.body;
+  if (!directory || !filePath) return res.status(400).json({ error: 'directory and filePath required' });
+  try {
+    await runGit(['restore', '--staged', '--', filePath], directory);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Discard les modifications d'un fichier (working tree)
+router.post('/discard', async (req, res) => {
+  const { directory, filePath, untracked } = req.body;
+  if (!directory || !filePath) return res.status(400).json({ error: 'directory and filePath required' });
+  try {
+    if (untracked) {
+      await runGit(['clean', '-f', '--', filePath], directory);
+    } else {
+      await runGit(['restore', '--', filePath], directory);
+    }
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Commit les fichiers stages
+router.post('/commit', async (req, res) => {
+  const { directory, message } = req.body;
+  if (!directory || !message) return res.status(400).json({ error: 'directory and message required' });
+  try {
+    const out = await runGit(['commit', '-m', message], directory);
+    res.json({ success: true, output: out });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Vue globale : fichiers modifies dans tous les terminaux actifs
+router.get('/all-changes', async (req, res) => {
+  const terminalManager = req.app.locals.terminalManager;
+  const terminals = (terminalManager?.listTerminals() || [])
+    .filter((t) => t.status === 'running' && t.directory);
+
+  const results = await Promise.allSettled(
+    terminals.map(async (t) => {
+      const { files, summary, currentBranch } = await getFullDiff(t.directory);
+      // Ne garder que les champs utiles (pas les diffs complets pour alléger)
+      return {
+        id: t.id,
+        name: t.name || t.id.substring(0, 8),
+        directory: t.directory,
+        currentBranch,
+        summary,
+        files: files.map(({ path, status }) => ({ path, status })),
+      };
+    })
+  );
+
+  const terminalData = results.map((r, i) =>
+    r.status === 'fulfilled'
+      ? r.value
+      : { id: terminals[i].id, name: terminals[i].name, directory: terminals[i].directory, files: [], summary: {}, error: r.reason?.message }
+  );
+
+  // Fichiers touches par plusieurs terminaux (clé = chemin absolu)
+  const fileIndex = new Map();
+  for (const t of terminalData) {
+    for (const f of t.files || []) {
+      // Cle = repertoire + chemin relatif pour avoir l'absolu
+      const absKey = `${t.directory.replace(/\\/g, '/')}/${f.path}`;
+      if (!fileIndex.has(absKey)) {
+        fileIndex.set(absKey, { path: f.path, directory: t.directory, status: f.status, sessions: [] });
+      }
+      fileIndex.get(absKey).sessions.push({ id: t.id, name: t.name });
+    }
+  }
+
+  // Trier : d'abord les fichiers multi-sessions (conflits potentiels), puis par path
+  const hotFiles = Array.from(fileIndex.values())
+    .sort((a, b) => b.sessions.length - a.sessions.length || a.path.localeCompare(b.path));
+
+  res.json({ terminals: terminalData, hotFiles });
 });
 
 // File d'attente de commits
