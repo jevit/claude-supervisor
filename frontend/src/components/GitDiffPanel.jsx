@@ -366,16 +366,27 @@ export default function GitDiffPanel({ directory, terminalId, onClose }) {
     if (!commitMsg.trim()) return;
     setCommitting(true);
     try {
+      // Si aucun fichier stagé, on stage tout d'abord
+      if (!hasStagedFiles) {
+        const ok = await gitOp('stage-all');
+        if (!ok) { setCommitting(false); return; }
+      }
       const res = await fetch('/api/git/commit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ directory, message: commitMsg.trim() }),
       });
-      setCommitResult(res.ok ? 'ok' : 'error');
-      if (res.ok) setCommitMsg('');
+      if (res.ok) {
+        setCommitResult('ok');
+        setCommitMsg('');
+      } else {
+        const j = await res.json().catch(() => ({}));
+        showOpError(j.error || 'Erreur lors du commit');
+        setCommitResult('error');
+      }
       setTimeout(() => setCommitResult(null), 3000);
       fetchDiff();
-    } catch { setCommitResult('error'); }
+    } catch (e) { showOpError(e.message); setCommitResult('error'); }
     setCommitting(false);
   };
 
@@ -577,36 +588,56 @@ export default function GitDiffPanel({ directory, terminalId, onClose }) {
             {/* Panneau commit — collé en bas de la colonne gauche */}
             {data.files?.length > 0 && (
               <div className="gdp-commit-panel" onClick={(e) => e.stopPropagation()}>
+                {/* Compteurs stagé / non-stagé */}
+                <div style={{ display: 'flex', gap: 6, fontSize: 10 }}>
+                  {hasStagedFiles && (
+                    <span style={{ color: '#10b981', background: 'rgba(16,185,129,0.1)', borderRadius: 8, padding: '1px 7px', fontWeight: 600 }}>
+                      ✓ {data.files.filter((f) => f.staged).length} stagé{data.files.filter((f) => f.staged).length > 1 ? 's' : ''}
+                    </span>
+                  )}
+                  {hasUnstagedFiles && (
+                    <span style={{ color: '#f59e0b', background: 'rgba(245,158,11,0.1)', borderRadius: 8, padding: '1px 7px', fontWeight: 600 }}>
+                      ● {data.files.filter((f) => f.unstaged || f.status === 'untracked').length} non-stagé{data.files.filter((f) => f.unstaged || f.status === 'untracked').length > 1 ? 's' : ''}
+                    </span>
+                  )}
+                </div>
                 {/* Erreur opération git */}
                 {opError && (
                   <div style={{ fontSize: 10, color: '#ef4444', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.25)', borderRadius: 4, padding: '4px 8px', wordBreak: 'break-word' }}>
                     ✗ {opError}
                   </div>
                 )}
-                {/* Stage All */}
-                {hasUnstagedFiles && (
+                {/* Stage All (raccourci explicite si rien n'est stagé) */}
+                {hasUnstagedFiles && hasStagedFiles && (
                   <button className="gdp-commit-action-btn" disabled={stageAllBusy} onClick={handleStageAll}
-                    style={{ background: 'rgba(16,185,129,0.12)', color: '#10b981', border: '1px solid rgba(16,185,129,0.3)' }}>
+                    style={{ background: 'rgba(16,185,129,0.08)', color: '#10b981', border: '1px solid rgba(16,185,129,0.25)' }}>
                     {stageAllBusy ? '…' : '+ Stage all'}
                   </button>
                 )}
-                {/* Message + commit */}
+                {/* Message de commit — toujours actif */}
                 <input
                   className="gdp-commit-input"
-                  placeholder={hasStagedFiles ? 'Message de commit…' : 'Stager des fichiers d\'abord'}
+                  placeholder="Message de commit…"
                   value={commitMsg}
                   onChange={(e) => setCommitMsg(e.target.value)}
                   onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleCommit(); } }}
-                  disabled={!hasStagedFiles}
                 />
-                <button className="gdp-commit-action-btn" disabled={!hasStagedFiles || !commitMsg.trim() || committing}
+                {/* Bouton commit — adaptatif selon l'état de staging */}
+                <button
+                  className="gdp-commit-action-btn"
+                  disabled={!commitMsg.trim() || committing}
                   onClick={handleCommit}
+                  title={!hasStagedFiles ? 'Stagera automatiquement tous les fichiers avant de commiter' : undefined}
                   style={{
-                    background: hasStagedFiles && commitMsg.trim() ? 'rgba(139,92,246,0.2)' : 'rgba(255,255,255,0.04)',
-                    color: hasStagedFiles && commitMsg.trim() ? '#8b5cf6' : '#565f89',
-                    border: `1px solid ${hasStagedFiles && commitMsg.trim() ? 'rgba(139,92,246,0.4)' : 'transparent'}`,
+                    background: commitMsg.trim() ? 'rgba(139,92,246,0.2)' : 'rgba(255,255,255,0.04)',
+                    color: commitMsg.trim() ? '#8b5cf6' : '#565f89',
+                    border: `1px solid ${commitMsg.trim() ? 'rgba(139,92,246,0.4)' : 'transparent'}`,
                   }}>
-                  {committing ? '…' : commitResult === 'ok' ? '✓ Commité' : commitResult === 'error' ? '✗ Erreur' : '⎇ Commit'}
+                  {committing ? '…'
+                    : commitResult === 'ok' ? '✓ Commité'
+                    : commitResult === 'error' ? '✗ Erreur'
+                    : hasStagedFiles ? '⎇ Commit'
+                    : '⎇ Stage all & Commit'}
                 </button>
               </div>
             )}
