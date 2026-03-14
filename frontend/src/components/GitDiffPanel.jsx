@@ -107,10 +107,9 @@ function fileStatusLetter(f) {
 }
 
 /* ── Composant arbre de fichiers ─────────────────────────────────── */
-function FileTreeNode({ name, node, selectedFile, onSelect, depth = 0 }) {
+function FileTreeNode({ name, node, selectedFile, onSelect, depth = 0, fileActionProps }) {
   const [open, setOpen] = useState(true);
   const hasFiles = node.files.length > 0;
-  const hasDirs  = Object.keys(node.dirs).length > 0;
   const indent   = depth * 12;
 
   return (
@@ -140,6 +139,7 @@ function FileTreeNode({ name, node, selectedFile, onSelect, depth = 0 }) {
               selectedFile={selectedFile}
               onSelect={onSelect}
               depth={depth + (name ? 1 : 0)}
+              fileActionProps={fileActionProps}
             />
           ))}
           {hasFiles && node.files.map((f) => {
@@ -172,6 +172,9 @@ function FileTreeNode({ name, node, selectedFile, onSelect, depth = 0 }) {
                   fontSize: 11, fontFamily: 'monospace', color: '#c0caf5',
                   flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                 }}>{fileName}</span>
+                {fileActionProps && (
+                  <FileActions file={f} {...fileActionProps} />
+                )}
               </div>
             );
           })}
@@ -222,19 +225,24 @@ const TOOL_ICON = { Write: '✎', Edit: '✏', MultiEdit: '✏✏', NotebookEdit
 function normPath(p) { return (p || '').replace(/\\/g, '/').toLowerCase(); }
 
 /* ── Boutons d'action Git ────────────────────────────────────────── */
-function FileActions({ file, directory, onDone, confirmDiscard, onConfirmDiscard }) {
+function FileActions({ file, directory, onDone, onError, confirmDiscard, onConfirmDiscard }) {
   const [busy, setBusy] = useState(false);
 
   const run = async (action, extra = {}) => {
     setBusy(true);
     try {
-      await fetch(`/api/git/${action}`, {
+      const res = await fetch(`/api/git/${action}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ directory, filePath: file.path, ...extra }),
       });
-      onDone();
-    } catch {}
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        onError?.(j.error || `Erreur git ${action}`);
+      } else {
+        onDone();
+      }
+    } catch (e) { onError?.(e.message); }
     setBusy(false);
   };
 
@@ -283,6 +291,12 @@ export default function GitDiffPanel({ directory, terminalId, onClose }) {
   const [commitResult, setCommitResult] = useState(null); // 'ok' | 'error'
   const [stageAllBusy, setStageAllBusy] = useState(false);
   const [confirmDiscard, setConfirmDiscard] = useState(null); // filepath en attente
+  const [opError, setOpError]           = useState(null);   // erreur git operation
+
+  const showOpError = (msg) => {
+    setOpError(msg);
+    setTimeout(() => setOpError(null), 4000);
+  };
   const refreshTimerRef               = useRef(null);
 
   // Réinitialiser la confirmation de discard sur clic ailleurs
@@ -326,12 +340,20 @@ export default function GitDiffPanel({ directory, terminalId, onClose }) {
   }, [terminalId, directory]);
 
   const gitOp = useCallback(async (action, body = {}) => {
-    await fetch(`/api/git/${action}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ directory, ...body }),
-    });
-    fetchDiff();
+    try {
+      const res = await fetch(`/api/git/${action}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ directory, ...body }),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        showOpError(j.error || `Erreur git ${action}`);
+        return false;
+      }
+    } catch (e) { showOpError(e.message); return false; }
+    await fetchDiff();
+    return true;
   }, [directory, fetchDiff]);
 
   const handleStageAll = async () => {
@@ -502,6 +524,7 @@ export default function GitDiffPanel({ directory, terminalId, onClose }) {
                         selectedFile={selectedFile}
                         onSelect={setSelectedFile}
                         depth={0}
+                        fileActionProps={{ directory, onDone: fetchDiff, onError: showOpError, confirmDiscard, onConfirmDiscard: setConfirmDiscard }}
                       />
                     </>
                   )}
@@ -518,7 +541,7 @@ export default function GitDiffPanel({ directory, terminalId, onClose }) {
                       >
                         <span className="gdp-file-status" style={{ color, background: color + '20' }}>{letter}</span>
                         <span className="gdp-file-name" style={{ flex: 1 }}>{f.path.split(/[/\\]/).pop()}</span>
-                        <FileActions file={f} directory={directory} onDone={fetchDiff}
+                        <FileActions file={f} directory={directory} onDone={fetchDiff} onError={showOpError}
                           confirmDiscard={confirmDiscard} onConfirmDiscard={setConfirmDiscard} />
                       </div>
                     );
@@ -554,6 +577,12 @@ export default function GitDiffPanel({ directory, terminalId, onClose }) {
             {/* Panneau commit — collé en bas de la colonne gauche */}
             {data.files?.length > 0 && (
               <div className="gdp-commit-panel" onClick={(e) => e.stopPropagation()}>
+                {/* Erreur opération git */}
+                {opError && (
+                  <div style={{ fontSize: 10, color: '#ef4444', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.25)', borderRadius: 4, padding: '4px 8px', wordBreak: 'break-word' }}>
+                    ✗ {opError}
+                  </div>
+                )}
                 {/* Stage All */}
                 {hasUnstagedFiles && (
                   <button className="gdp-commit-action-btn" disabled={stageAllBusy} onClick={handleStageAll}
