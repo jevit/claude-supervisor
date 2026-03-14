@@ -57,25 +57,77 @@ function GitSummary({ directory }) {
 
   const { modified = 0, added = 0, deleted = 0, untracked = 0 } = git.summary;
   return (
-    <div className="orc-git-row">
-      <span className="orc-git-badge">
-        {git.files.length} fichier{git.files.length > 1 ? 's' : ''}
-        {modified > 0  && <span style={{ color: '#f59e0b' }}> ~{modified}</span>}
-        {added > 0     && <span style={{ color: '#10b981' }}> +{added}</span>}
-        {deleted > 0   && <span style={{ color: '#ef4444' }}> -{deleted}</span>}
-        {untracked > 0 && <span style={{ color: '#64748b' }}> ?{untracked}</span>}
-      </span>
-      <button className="orc-git-toggle" onClick={() => setOpen((v) => !v)}>
-        {open ? '▲ masquer diff' : '▼ voir diff'}
-      </button>
+    <div style={{ width: '100%' }}>
+      {/* Résumé + toggle */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <span className="orc-git-badge">
+          {git.files.length} fichier{git.files.length > 1 ? 's' : ''}
+          {modified > 0  && <span style={{ color: '#f59e0b' }}> ~{modified}</span>}
+          {added > 0     && <span style={{ color: '#10b981' }}> +{added}</span>}
+          {deleted > 0   && <span style={{ color: '#ef4444' }}> -{deleted}</span>}
+          {untracked > 0 && <span style={{ color: '#64748b' }}> ?{untracked}</span>}
+        </span>
+        <button className="orc-git-toggle" onClick={() => setOpen((v) => !v)}>
+          {open ? '▲ masquer' : '▼ voir diff'}
+        </button>
+      </div>
+
+      {/* Détail dépliable — fichiers + hunks */}
       {open && (
-        <div className="orc-git-files">
+        <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
           {git.files.map((f, i) => (
-            <div key={i} className="orc-git-file">
-              <span className={`orc-git-status orc-git-${f.status}`}>{f.status[0].toUpperCase()}</span>
-              <span className="orc-git-path">{f.path}</span>
-            </div>
+            <FileHunk key={i} file={f} />
           ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── Fichier + hunk de diff ──────────────────────────────────────── */
+function FileHunk({ file }) {
+  const [open, setOpen] = useState(false);
+  const statusColor = { modified: '#f59e0b', added: '#10b981', deleted: '#ef4444', untracked: '#64748b' };
+
+  return (
+    <div style={{ border: '1px solid #2a2b3d', borderRadius: 6, overflow: 'hidden' }}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        style={{
+          width: '100%', display: 'flex', alignItems: 'center', gap: 8,
+          background: '#1a1b26', border: 'none', padding: '5px 10px',
+          cursor: 'pointer', textAlign: 'left',
+        }}
+      >
+        <span style={{ color: statusColor[file.status] || '#64748b', fontWeight: 700, fontSize: 11, width: 14 }}>
+          {file.status[0].toUpperCase()}
+        </span>
+        <span style={{ fontFamily: 'monospace', fontSize: 11, color: '#c0caf5', flex: 1 }}>{file.path}</span>
+        <span style={{ fontSize: 10, color: '#565f89' }}>{open ? '▲' : '▼'}</span>
+      </button>
+      {open && file.diff && (
+        <pre style={{
+          margin: 0, padding: '6px 10px',
+          background: '#141520', fontFamily: 'monospace', fontSize: 10,
+          color: '#c0caf5', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+          maxHeight: 300, overflowY: 'auto', lineHeight: 1.5,
+        }}>
+          {file.diff.split('\n').map((line, i) => (
+            <span key={i} style={{
+              display: 'block',
+              color: line.startsWith('+') ? '#10b981'
+                   : line.startsWith('-') ? '#ef4444'
+                   : line.startsWith('@@') ? '#8b5cf6'
+                   : '#c0caf5',
+            }}>
+              {line || ' '}
+            </span>
+          ))}
+        </pre>
+      )}
+      {open && !file.diff && (
+        <div style={{ padding: '6px 10px', fontSize: 11, color: '#565f89', background: '#141520' }}>
+          Pas de diff disponible
         </div>
       )}
     </div>
@@ -172,7 +224,6 @@ function SquadCard({ squad, outputs, onBroadcast, onNavigate }) {
       {/* Git diff du répertoire du squad */}
       {squad.directory && (
         <div className="orc-squad-git">
-          <span className="orc-git-muted" style={{ marginRight: 8 }}>Git :</span>
           <GitSummary directory={squad.directory} />
         </div>
       )}
@@ -413,7 +464,7 @@ export default function Orchestrator() {
         .orc-squad-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
         .orc-squad-fill { height: 6px; background: var(--accent); border-radius: 3px; transition: width 0.5s; flex-shrink: 0; }
         .orc-squad-pct { font-size: 11px; color: var(--text-secondary); font-weight: 600; }
-        .orc-squad-git { padding: 8px 16px; border-top: 1px solid var(--border); display: flex; align-items: flex-start; gap: 6px; flex-wrap: wrap; }
+        .orc-squad-git { padding: 8px 16px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
 
         /* Broadcast */
         .orc-broadcast { display: flex; gap: 6px; align-items: center; }
