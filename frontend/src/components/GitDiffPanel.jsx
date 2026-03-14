@@ -150,19 +150,26 @@ export default function GitDiffPanel({ directory, terminalId, onClose }) {
 
   return (
     <div className="gdp-root">
-      {/* En-tete */}
+      {/* En-tete — fond violet distinctif pour signaler qu'on est en vue Git */}
       <div className="gdp-header">
         <div className="gdp-header-left">
-          <span className="gdp-title">Git Diff</span>
-          <span className="gdp-directory" title={directory}>{directory || '...'}</span>
+          <span className="gdp-title">⎇ Git Diff</span>
+          <span className="gdp-directory" title={directory}>
+            {directory ? directory.split(/[/\\]/).slice(-2).join('/') : '…'}
+          </span>
+          {data?.currentBranch && (
+            <span style={{ fontSize: 11, background: 'rgba(139,92,246,0.25)', color: '#8b5cf6', border: '1px solid rgba(139,92,246,0.4)', borderRadius: 4, padding: '1px 7px', fontWeight: 700 }}>
+              {data.currentBranch}
+            </span>
+          )}
         </div>
         <div className="gdp-header-right">
-          <button className="gdp-btn gdp-btn-refresh" onClick={fetchDiff} title="Rafraichir">
-            ↻
+          <button className="gdp-btn gdp-btn-refresh" onClick={fetchDiff} title="Rafraichir" disabled={loading}>
+            {loading ? '⟳' : '↻'}
           </button>
           {onClose && (
-            <button className="gdp-btn gdp-btn-close" onClick={onClose} title="Fermer">
-              ✕
+            <button className="gdp-btn gdp-btn-close" onClick={onClose} title="Retour au terminal (>_)">
+              &gt;_ Retour
             </button>
           )}
         </div>
@@ -319,8 +326,8 @@ export default function GitDiffPanel({ directory, terminalId, onClose }) {
           justify-content: space-between;
           align-items: center;
           padding: 8px 12px;
-          background: #1a1b26;
-          border-bottom: 1px solid var(--border, #2d3148);
+          background: rgba(139, 92, 246, 0.12);
+          border-bottom: 2px solid rgba(139, 92, 246, 0.4);
           flex-shrink: 0;
         }
         .gdp-header-left {
