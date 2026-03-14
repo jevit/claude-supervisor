@@ -48,14 +48,28 @@ router.post('/diff', async (req, res) => {
     for (const f of files) {
       try {
         if (f.status === 'untracked') {
-          f.diff = await runGitCmd(['diff', '--no-index', '/dev/null', f.path], directory);
+          // /dev/null ne fonctionne pas sur Windows — afficher le contenu du fichier
+          try {
+            f.diff = await runGitCmd(['diff', '--no-index', 'NUL', f.path], directory);
+          } catch {
+            f.diff = await runGitCmd(['show', `:${f.path}`], directory).catch(() => '');
+          }
         } else {
           f.diff = await runGitCmd(['diff', 'HEAD', '--', f.path], directory);
           if (!f.diff) f.diff = await runGitCmd(['diff', '--cached', '--', f.path], directory);
         }
       } catch { f.diff = ''; }
     }
-    res.json({ files, summary, combinedDiff });
+    // Derniers commits pour contexte (affichés même si working tree propre)
+    let recentCommits = [];
+    try {
+      const logRaw = await runGitCmd(['log', '--oneline', '-8', '--decorate'], directory);
+      recentCommits = logRaw.split('\n').filter(Boolean).map((line) => {
+        const [hash, ...rest] = line.split(' ');
+        return { hash, message: rest.join(' ') };
+      });
+    } catch {}
+    res.json({ files, summary, combinedDiff, recentCommits });
   } catch (err) {
     if (err.message?.includes('not a git repository') || err.stderr?.includes('not a git repository')) {
       return res.status(400).json({ error: 'Pas un depot git', directory });

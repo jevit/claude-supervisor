@@ -33,31 +33,53 @@ function GitSummary({ directory }) {
 
   if (loading) return <span className="orc-git-muted">git…</span>;
   if (!git || git.error) return null;
-  if (git.files.length === 0) return <span className="orc-git-muted">Aucun changement git</span>;
 
-  const { modified = 0, added = 0, deleted = 0, untracked = 0 } = git.summary;
+  const { modified = 0, added = 0, deleted = 0, untracked = 0 } = git.summary || {};
+  const hasChanges = git.files?.length > 0;
+  const hasCommits = git.recentCommits?.length > 0;
+  if (!hasChanges && !hasCommits) return <span className="orc-git-muted">Aucun historique git</span>;
+
   return (
     <div style={{ width: '100%' }}>
       {/* Résumé + toggle */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        <span className="orc-git-badge">
-          {git.files.length} fichier{git.files.length > 1 ? 's' : ''}
-          {modified > 0  && <span style={{ color: '#f59e0b' }}> ~{modified}</span>}
-          {added > 0     && <span style={{ color: '#10b981' }}> +{added}</span>}
-          {deleted > 0   && <span style={{ color: '#ef4444' }}> -{deleted}</span>}
-          {untracked > 0 && <span style={{ color: '#64748b' }}> ?{untracked}</span>}
-        </span>
+        {hasChanges ? (
+          <span className="orc-git-badge">
+            {git.files.length} fichier{git.files.length > 1 ? 's' : ''} modifié{git.files.length > 1 ? 's' : ''}
+            {modified > 0  && <span style={{ color: '#f59e0b' }}> ~{modified}</span>}
+            {added > 0     && <span style={{ color: '#10b981' }}> +{added}</span>}
+            {deleted > 0   && <span style={{ color: '#ef4444' }}> -{deleted}</span>}
+            {untracked > 0 && <span style={{ color: '#64748b' }}> ?{untracked}</span>}
+          </span>
+        ) : (
+          <span className="orc-git-muted" style={{ fontSize: 11 }}>Working tree propre</span>
+        )}
         <button className="orc-git-toggle" onClick={() => setOpen((v) => !v)}>
-          {open ? '▲ masquer' : '▼ voir diff'}
+          {open ? '▲ masquer' : '▼ voir historique'}
         </button>
       </div>
 
-      {/* Détail dépliable — fichiers + hunks */}
+      {/* Détail dépliable */}
       {open && (
         <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
-          {git.files.map((f, i) => (
+          {/* Fichiers modifiés */}
+          {hasChanges && git.files.map((f, i) => (
             <FileHunk key={i} file={f} />
           ))}
+          {/* Derniers commits */}
+          {hasCommits && (
+            <div style={{ marginTop: hasChanges ? 8 : 0 }}>
+              <div style={{ fontSize: 10, color: '#565f89', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                Derniers commits
+              </div>
+              {git.recentCommits.map((c) => (
+                <div key={c.hash} style={{ display: 'flex', gap: 8, padding: '3px 0', borderBottom: '1px solid #2a2b3d', alignItems: 'baseline' }}>
+                  <code style={{ fontSize: 10, color: '#8b5cf6', flexShrink: 0 }}>{c.hash}</code>
+                  <span style={{ fontSize: 11, color: '#c0caf5' }}>{c.message}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
