@@ -34,6 +34,8 @@ export function useWebSocket(onMessage) {
       try {
         const { event: evt, data } = JSON.parse(event.data);
         onMessageRef.current(evt, data);
+        // Dispatcher un evenement global pour les listeners passifs (AttentionNotifier)
+        window.dispatchEvent(new CustomEvent('ws:message', { detail: { event: evt, data } }));
       } catch (e) {
         console.error('WebSocket parse error:', e);
       }
@@ -79,5 +81,13 @@ export function useWebSocket(onMessage) {
     };
   }, [connect]);
 
-  return { connectionState };
+  const send = useCallback((type, data) => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type, data }));
+      return true;
+    }
+    return false;
+  }, []);
+
+  return { connectionState, send };
 }

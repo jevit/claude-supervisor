@@ -13,10 +13,14 @@ class WsProtocol {
     this.broadcast = broadcast;
     this.lockManager = options.lockManager || null;
     this.messageBus = options.messageBus || null;
+    this.approvalRules = options.approvalRules || null;
     this.heartbeatTimeout = options.heartbeatTimeout || 30000;
 
     // Map ws -> { type: 'dashboard'|'terminal', sessionId?, heartbeatTimer? }
     this.clients = new Map();
+
+    // Map sessionId -> ws pour envoyer des commandes aux terminaux connectes
+    this.terminals = new Map();
 
     this._setupConnectionHandler();
   }
@@ -95,10 +99,25 @@ class WsProtocol {
       directory: data.directory || '',
     });
 
+    // Stocker le ws pour envoi de commandes
+    this.terminals.set(data.sessionId, ws);
+
     // Demarrer le heartbeat timer
     this._resetHeartbeat(ws);
 
-    this._sendTo(ws, 'registered', { session });
+    // Envoyer l'etat initial au terminal : messages en attente + locks actifs
+    const pendingMessages = this.messageBus
+      ? this.messageBus.getMessages(data.sessionId, { unreadOnly: true })
+      : [];
+    const activeLocks = [];
+    if (this.lockManager) {
+      for (const [filePath, holders] of this.lockManager.locks) {
+        if (holders.has(data.sessionId)) activeLocks.push(filePath);
+      }
+    }
+
+    const approvalRulesList = this.approvalRules ? this.approvalRules.getAll() : [];
+    this._sendTo(ws, 'registered', { session, pendingMessages, activeLocks, approvalRules: approvalRulesList });
     console.log(`Terminal enregistre: ${data.sessionId}`);
   }
 
@@ -220,6 +239,11 @@ class WsProtocol {
       clearTimeout(client.heartbeatTimer);
     }
 
+    // Retirer du registre des terminaux connectes
+    if (client.sessionId) {
+      this.terminals.delete(client.sessionId);
+    }
+
     // Liberer tous les locks de cette session
     if (this.lockManager) {
       this.lockManager.releaseAll(client.sessionId);
@@ -227,6 +251,30 @@ class WsProtocol {
 
     // Marquer la session comme deconnectee plutot que la supprimer
     this.tracker.updateSession(client.sessionId, { status: 'disconnected' });
+  }
+
+  /**
+   * Envoie un evenement a un terminal specifique par sessionId.
+   * Retourne true si envoye, false si terminal non connecte.
+   */
+  sendToTerminal(sessionId, event, data) {
+    const ws = this.terminals.get(sessionId);
+    if (!ws) return false;
+    this._sendTo(ws, event, data);
+    return true;
+  }
+
+  /**
+   * Envoie un evenement a TOUS les terminaux connectes.
+   * Retourne le nombre de terminaux atteints.
+   */
+  broadcastToTerminals(event, data) {
+    let count = 0;
+    for (const ws of this.terminals.values()) {
+      this._sendTo(ws, event, data);
+      count++;
+    }
+    return count;
   }
 
   /**

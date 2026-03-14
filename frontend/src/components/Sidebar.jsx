@@ -1,19 +1,12 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
-import NotificationCenter from './NotificationCenter';
 
 const NAV_ITEMS = [
-  { to: '/', label: 'Dashboard' },
-  { to: '/agents', label: 'Agents' },
-  { to: '/timeline', label: 'Timeline' },
+  { to: '/terminals', label: 'Terminaux' },
   { to: '/conflicts', label: 'Conflits & Locks' },
-  { to: '/health', label: 'Health Checks' },
   { to: '/context', label: 'Contexte Partage' },
-  { to: '/messages', label: 'Messages' },
-  { to: '/irritants', label: 'Irritants' },
-  { to: '/alerts', label: 'Regles d\'Alertes' },
   { to: '/analytics', label: 'Analytics' },
-  { to: '/supervisor', label: 'Mode Superviseur' },
+  { to: '/squads', label: 'Squad Mode' },
 ];
 
 export default function Sidebar() {
@@ -31,9 +24,6 @@ export default function Sidebar() {
           </li>
         ))}
       </ul>
-      <div className="sidebar-footer">
-        <NotificationCenter />
-      </div>
       <style>{`
         .sidebar {
           position: fixed;
@@ -73,9 +63,6 @@ export default function Sidebar() {
           color: var(--text-primary);
           background: rgba(139, 92, 246, 0.1);
           border-right: 3px solid var(--accent);
-        }
-        .sidebar-footer {
-          border-top: 1px solid var(--border);
         }
       `}</style>
     </nav>

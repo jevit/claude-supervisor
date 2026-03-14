@@ -1,3 +1,6 @@
+const { randomUUID } = require('crypto');
+const crypto = { randomUUID };
+
 /**
  * TerminalTracker - Monitors multiple Claude Code terminal sessions.
  *
@@ -39,12 +42,14 @@ class TerminalTracker {
       currentTask: null,
       thinkingState: null,
       history: [],
+      taskQueue: [],
+      gitStatus: null,
       lastUpdate: new Date().toISOString(),
       startedAt: new Date().toISOString(),
     };
     this.sessions.set(sessionId, session);
     this._persist();
-    this.broadcast('session:registered', session);
+    this.broadcast('session:registered', this._normalize(session));
     return session;
   }
 
@@ -67,8 +72,69 @@ class TerminalTracker {
     }
 
     this._persist();
-    this.broadcast('session:updated', session);
+    // Broadcaster une version normalisee (recentActions au lieu de history brut)
+    this.broadcast('session:updated', this._normalize(session));
     return session;
+  }
+
+  /**
+   * Ajoute une tache a la file d'attente d'une session.
+   */
+  queueTask(sessionId, task) {
+    const session = this.sessions.get(sessionId);
+    if (!session) return null;
+    if (!session.taskQueue) session.taskQueue = [];
+    const entry = { id: crypto.randomUUID(), task, queuedAt: new Date().toISOString() };
+    session.taskQueue.push(entry);
+    this._persist();
+    this.broadcast('session:updated', this._normalize(session));
+    return entry;
+  }
+
+  /**
+   * Retire et retourne la prochaine tache de la file.
+   */
+  dequeueTask(sessionId) {
+    const session = this.sessions.get(sessionId);
+    if (!session || !session.taskQueue || session.taskQueue.length === 0) return null;
+    const next = session.taskQueue.shift();
+    this._persist();
+    this.broadcast('session:updated', this._normalize(session));
+    return next;
+  }
+
+  /**
+   * Met a jour le statut git d'une session.
+   */
+  setGitStatus(sessionId, gitStatus) {
+    const session = this.sessions.get(sessionId);
+    if (!session) return null;
+    session.gitStatus = gitStatus;
+    session.lastUpdate = new Date().toISOString();
+    this._persist();
+    this.broadcast('session:updated', this._normalize(session));
+    return session;
+  }
+
+  /**
+   * Retourne une vue normalisee d'une session pour le broadcast.
+   */
+  _normalize(session) {
+    return {
+      id: session.id,
+      name: session.name,
+      directory: session.directory,
+      projectName: session.projectName,
+      gitRemote: session.gitRemote,
+      status: session.status,
+      currentTask: session.currentTask,
+      thinkingState: session.thinkingState,
+      lastUpdate: session.lastUpdate,
+      startedAt: session.startedAt,
+      recentActions: session.history.slice(-5),
+      taskQueue: session.taskQueue || [],
+      gitStatus: session.gitStatus || null,
+    };
   }
 
   removeSession(sessionId) {

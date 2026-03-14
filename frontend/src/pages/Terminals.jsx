@@ -1,0 +1,607 @@
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import { Terminal as XTerm } from 'xterm';
+import { FitAddon } from '@xterm/addon-fit';
+import 'xterm/css/xterm.css';
+import GitDiffPanel from '../components/GitDiffPanel';
+
+// Layouts disponibles en mode grille
+const LAYOUTS = [
+  { id: '1x2', cols: 1, rows: 2, label: '1×2', max: 2 },
+  { id: '2x1', cols: 2, rows: 1, label: '2×1', max: 2 },
+  { id: '2x2', cols: 2, rows: 2, label: '2×2', max: 4 },
+  { id: '2x3', cols: 2, rows: 3, label: '2×3', max: 6 },
+];
+
+/**
+ * Composant d'un terminal individuel avec xterm.js
+ */
+function TerminalView({ terminalId, terminalName, terminalDirectory, onClose, onRename, compact = false }) {
+  const containerRef = useRef(null);
+  const xtermRef    = useRef(null);
+  const fitAddonRef = useRef(null);
+  const wsRef       = useRef(null);
+  const [editing, setEditing]   = useState(false);
+  const [editName, setEditName] = useState(terminalName || '');
+  const [showDiff, setShowDiff] = useState(false);
+
+  useEffect(() => {
+    if (!containerRef.current || !terminalId) return;
+
+    const xterm = new XTerm({
+      theme: {
+        background: '#1a1b26',
+        foreground: '#c0caf5',
+        cursor:     '#c0caf5',
+        selection:  'rgba(139, 92, 246, 0.3)',
+      },
+      fontFamily:   '"Cascadia Code", "Fira Code", Consolas, monospace',
+      fontSize:     compact ? 11 : 13,
+      cursorBlink:  true,
+      scrollback:   5000,
+      rightClickSelectsWord: true,
+    });
+
+    const fitAddon = new FitAddon();
+    xterm.loadAddon(fitAddon);
+    xterm.open(containerRef.current);
+    requestAnimationFrame(() => fitAddon.fit());
+
+    xterm.attachCustomKeyEventHandler((e) => {
+      if (e.ctrlKey && e.key === 'c' && xterm.hasSelection()) {
+        navigator.clipboard.writeText(xterm.getSelection());
+        return false;
+      }
+      if (e.ctrlKey && (e.key === 'v' || e.key === 'V')) {
+        if (e.type === 'keydown') {
+          navigator.clipboard.readText().then((text) => {
+            if (text) fetch(`/api/terminals/${terminalId}/write`, {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ data: text }),
+            }).catch(() => {});
+          }).catch(() => {});
+        }
+        return false;
+      }
+      if (e.ctrlKey && e.shiftKey && e.key === 'C') {
+        navigator.clipboard.writeText(xterm.getSelection());
+        return false;
+      }
+      return true;
+    });
+
+    containerRef.current.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      navigator.clipboard.readText().then((text) => {
+        if (text) fetch(`/api/terminals/${terminalId}/write`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ data: text }),
+        }).catch(() => {});
+      }).catch(() => {});
+    });
+
+    xtermRef.current    = xterm;
+    fitAddonRef.current = fitAddon;
+
+    fetch(`/api/terminals/${terminalId}/output?last=10000`)
+      .then((r) => r.json())
+      .then((data) => { if (data.output) xterm.write(data.output); })
+      .catch(() => {});
+
+    const wsUrl = `ws://${window.location.hostname}:3001`;
+    const ws    = new WebSocket(wsUrl);
+    wsRef.current = ws;
+
+    ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        if (msg.event === 'terminal:output' && msg.data?.terminalId === terminalId) {
+          xterm.write(msg.data.data);
+        }
+      } catch {}
+    };
+
+    xterm.onData((data) => {
+      fetch(`/api/terminals/${terminalId}/write`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data }),
+      }).catch(() => {});
+    });
+
+    const resizeObserver = new ResizeObserver(() => {
+      fitAddon.fit();
+      fetch(`/api/terminals/${terminalId}/resize`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cols: xterm.cols, rows: xterm.rows }),
+      }).catch(() => {});
+    });
+    resizeObserver.observe(containerRef.current);
+
+    return () => {
+      resizeObserver.disconnect();
+      ws.close();
+      xterm.dispose();
+    };
+  }, [terminalId, compact]);
+
+  const headerHeight = compact ? 28 : 36;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      {/* Barre de titre */}
+      <div style={{
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        padding: compact ? '3px 8px' : '6px 12px',
+        height: headerHeight, boxSizing: 'border-box',
+        background: '#1a1b26', borderBottom: '1px solid var(--border)', flexShrink: 0,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+          {editing ? (
+            <form
+              onSubmit={(e) => { e.preventDefault(); if (editName.trim()) { onRename(terminalId, editName.trim()); setEditing(false); } }}
+              style={{ display: 'flex', gap: 4 }}
+            >
+              <input
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                autoFocus
+                onBlur={() => { if (editName.trim()) onRename(terminalId, editName.trim()); setEditing(false); }}
+                style={{ background: 'rgba(255,255,255,0.1)', border: '1px solid var(--accent)', borderRadius: 4, padding: '2px 6px', color: '#c0caf5', fontSize: compact ? 11 : 12, fontFamily: 'monospace', width: 150 }}
+              />
+            </form>
+          ) : (
+            <span
+              style={{ fontSize: compact ? 11 : 12, color: '#c0caf5', fontFamily: 'monospace', cursor: 'pointer', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+              onDoubleClick={() => setEditing(true)}
+              title={`${terminalName || terminalId} — double-cliquer pour renommer`}
+            >
+              {terminalName || `Terminal ${terminalId?.substring(0, 8)}`}
+            </span>
+          )}
+          {!compact && (
+            <span style={{ fontSize: 10, color: '#565f89', fontFamily: 'monospace', flexShrink: 0 }}>
+              {terminalId?.substring(0, 8)}
+            </span>
+          )}
+        </div>
+        <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexShrink: 0 }}>
+          <button
+            onClick={() => setShowDiff(v => !v)}
+            style={{
+              background: showDiff ? 'var(--accent)' : 'none',
+              color: showDiff ? 'white' : '#c0caf5',
+              border: '1px solid var(--border)', borderRadius: 4,
+              padding: compact ? '1px 5px' : '2px 8px',
+              cursor: 'pointer', fontSize: compact ? 10 : 11,
+              fontFamily: 'monospace', fontWeight: 600,
+            }}
+            title={showDiff ? 'Retour au terminal' : 'Voir le diff Git'}
+          >
+            {showDiff ? '>_' : '±'}
+          </button>
+          <button
+            onClick={onClose}
+            style={{ background: '#ef4444', color: 'white', border: 'none', borderRadius: 4, padding: compact ? '1px 6px' : '2px 10px', cursor: 'pointer', fontSize: compact ? 10 : 11 }}
+          >
+            ×
+          </button>
+        </div>
+      </div>
+
+      {/* Corps : terminal ou diff */}
+      {showDiff ? (
+        <div style={{ flex: 1, overflow: 'hidden' }}>
+          <GitDiffPanel terminalId={terminalId} directory={terminalDirectory} onClose={() => setShowDiff(false)} />
+        </div>
+      ) : (
+        <div ref={containerRef} style={{ flex: 1, overflow: 'hidden' }} />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Cellule vide dans la grille : invite a selectionner un terminal
+ */
+function EmptyCell({ index }) {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      background: '#1a1b26', border: '1px dashed #2a2b3d', borderRadius: 4,
+      color: '#565f89', fontSize: 13, flexDirection: 'column', gap: 6,
+    }}>
+      <span style={{ fontSize: 24, opacity: 0.3 }}>+</span>
+      <span style={{ fontSize: 11 }}>Cellule {index + 1}</span>
+      <span style={{ fontSize: 10, opacity: 0.5 }}>Cliquer un terminal dans la liste</span>
+    </div>
+  );
+}
+
+/**
+ * Page Terminals — vue single ou grille multi-terminaux.
+ */
+export default function Terminals() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [terminals, setTerminals]       = useState([]);
+  const [activeTerminal, setActiveTerminal] = useState(null);
+  const [available, setAvailable]       = useState(false);
+  const [loading, setLoading]           = useState(true);
+  const [editingListId, setEditingListId]     = useState(null);
+  const [editingListName, setEditingListName] = useState('');
+
+  // Mode grille
+  const [gridMode, setGridMode]           = useState(false);
+  const [layoutId, setLayoutId]           = useState('2x2');
+  const [gridTerminals, setGridTerminals] = useState([]); // IDs ordonnés dans la grille
+
+  const layout = LAYOUTS.find((l) => l.id === layoutId) || LAYOUTS[2];
+
+  // Ouvrir un terminal via ?open=<id>
+  useEffect(() => {
+    const openId = searchParams.get('open');
+    if (openId) {
+      setActiveTerminal(openId);
+      setSearchParams({}, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
+
+  // Formulaire de lancement
+  const [directory, setDirectory]       = useState('');
+  const [name, setName]                 = useState('');
+  const [prompt, setPrompt]             = useState('');
+  const [model, setModel]               = useState('');
+  const [dangerousMode, setDangerousMode] = useState(false);
+
+  const fetchTerminals = useCallback(async () => {
+    try {
+      const [terms, avail] = await Promise.all([
+        fetch('/api/terminals').then((r) => r.json()),
+        fetch('/api/terminals/available').then((r) => r.json()),
+      ]);
+      setTerminals(Array.isArray(terms) ? terms : []);
+      setAvailable(avail.available);
+    } catch {}
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    fetchTerminals();
+    const t = setInterval(fetchTerminals, 3000);
+    return () => clearInterval(t);
+  }, [fetchTerminals]);
+
+  const spawnTerminal = async (e) => {
+    e.preventDefault();
+    try {
+      const res = await fetch('/api/terminals', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          directory:    directory || undefined,
+          name:         name || undefined,
+          prompt:       prompt || undefined,
+          model:        model || undefined,
+          dangerousMode: dangerousMode || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (data.terminalId) {
+        if (gridMode) {
+          addToGrid(data.terminalId);
+        } else {
+          setActiveTerminal(data.terminalId);
+        }
+        setDirectory(''); setName(''); setPrompt('');
+        fetchTerminals();
+      }
+    } catch {}
+  };
+
+  const killTerminal = async (id) => {
+    await fetch(`/api/terminals/${id}`, { method: 'DELETE' });
+    if (activeTerminal === id) setActiveTerminal(null);
+    setGridTerminals((prev) => prev.filter((tid) => tid !== id));
+    fetchTerminals();
+  };
+
+  const cleanupTerminals = async () => {
+    await fetch('/api/terminals/cleanup', { method: 'POST' });
+    fetchTerminals();
+  };
+
+  const renameTerminal = async (id, newName) => {
+    await fetch(`/api/terminals/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: newName }),
+    });
+    fetchTerminals();
+  };
+
+  // Gestion de la grille
+  const addToGrid = (id) => {
+    setGridTerminals((prev) => {
+      if (prev.includes(id)) return prev.filter((t) => t !== id); // toggle off
+      if (prev.length >= layout.max) {
+        // Remplace le dernier slot
+        return [...prev.slice(0, layout.max - 1), id];
+      }
+      return [...prev, id];
+    });
+  };
+
+  const removeFromGrid = (id) => {
+    setGridTerminals((prev) => prev.filter((t) => t !== id));
+  };
+
+  const handleTerminalClick = (id) => {
+    if (gridMode) {
+      addToGrid(id);
+    } else {
+      setActiveTerminal(id);
+    }
+  };
+
+  // Quand on change de layout, tronquer si nécessaire
+  const handleLayoutChange = (id) => {
+    const l = LAYOUTS.find((x) => x.id === id);
+    setLayoutId(id);
+    if (l) setGridTerminals((prev) => prev.slice(0, l.max));
+  };
+
+  // Construire les cellules de la grille (slots fixes)
+  const gridCells = Array.from({ length: layout.cols * layout.rows }, (_, i) => gridTerminals[i] || null);
+
+  if (loading) return <div className="card" style={{ textAlign: 'center', padding: 32 }}>Chargement...</div>;
+
+  return (
+    <div style={{ height: 'calc(100vh - 40px)', display: 'flex', flexDirection: 'column' }}>
+      {/* En-tête */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+        <h2 style={{ margin: 0 }}>Terminaux Claude Code</h2>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          {!available && (
+            <span style={{ fontSize: 12, color: '#ef4444', background: 'rgba(239,68,68,0.1)', padding: '4px 10px', borderRadius: 6 }}>
+              node-pty non disponible
+            </span>
+          )}
+          {/* Toggle grille */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <button
+              onClick={() => { setGridMode(false); }}
+              style={{
+                padding: '4px 12px', borderRadius: '6px 0 0 6px', border: '1px solid var(--border)',
+                background: !gridMode ? 'var(--accent)' : 'var(--bg-card)',
+                color: !gridMode ? 'white' : 'var(--text-secondary)',
+                cursor: 'pointer', fontSize: 13, fontWeight: 600,
+              }}
+              title="Vue simple"
+            >
+              ▣
+            </button>
+            <button
+              onClick={() => { setGridMode(true); }}
+              style={{
+                padding: '4px 12px', borderRadius: '0 6px 6px 0', border: '1px solid var(--border)',
+                borderLeft: 'none',
+                background: gridMode ? 'var(--accent)' : 'var(--bg-card)',
+                color: gridMode ? 'white' : 'var(--text-secondary)',
+                cursor: 'pointer', fontSize: 13, fontWeight: 600,
+              }}
+              title="Vue grille"
+            >
+              ⊞ Grille
+            </button>
+          </div>
+          {/* Sélecteur de layout (visible seulement en mode grille) */}
+          {gridMode && (
+            <div style={{ display: 'flex', gap: 4 }}>
+              {LAYOUTS.map((l) => (
+                <button
+                  key={l.id}
+                  onClick={() => handleLayoutChange(l.id)}
+                  style={{
+                    padding: '4px 10px', borderRadius: 6, border: '1px solid var(--border)',
+                    background: layoutId === l.id ? 'rgba(139,92,246,0.2)' : 'var(--bg-card)',
+                    color: layoutId === l.id ? 'var(--accent)' : 'var(--text-secondary)',
+                    cursor: 'pointer', fontSize: 12, fontWeight: layoutId === l.id ? 700 : 400,
+                  }}
+                >
+                  {l.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Corps principal */}
+      <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: 12, flex: 1, minHeight: 0 }}>
+        {/* Panneau gauche : formulaire + liste */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, overflow: 'auto' }}>
+          {/* Formulaire de lancement */}
+          <div className="card">
+            <h3 style={{ marginBottom: 10, fontSize: 13 }}>Lancer un terminal</h3>
+            <form onSubmit={spawnTerminal} style={{ display: 'grid', gap: 7 }}>
+              <input placeholder="Repertoire (ex: C:/mon-projet)" value={directory} onChange={(e) => setDirectory(e.target.value)} className="form-input" />
+              <input placeholder="Nom (optionnel)" value={name} onChange={(e) => setName(e.target.value)} className="form-input" />
+              <textarea placeholder="Prompt initial (optionnel)" value={prompt} onChange={(e) => setPrompt(e.target.value)} className="form-input" rows={2} style={{ resize: 'vertical' }} />
+              <select value={model} onChange={(e) => setModel(e.target.value)} className="form-input">
+                <option value="">Modele par defaut</option>
+                <option value="sonnet">Sonnet</option>
+                <option value="opus">Opus</option>
+                <option value="haiku">Haiku</option>
+              </select>
+              <label className="dangerous-label">
+                <input type="checkbox" checked={dangerousMode} onChange={(e) => setDangerousMode(e.target.checked)} />
+                <span className="dangerous-text">Mode dangereux</span>
+                <span className="dangerous-hint">(skip permissions)</span>
+              </label>
+              <button type="submit" className="btn btn-primary" disabled={!available}>
+                Lancer Claude Code
+              </button>
+            </form>
+          </div>
+
+          {/* Liste des terminaux */}
+          <div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <h3 style={{ fontSize: 13, margin: 0 }}>
+                Terminaux ({terminals.length})
+                {gridMode && gridTerminals.length > 0 && (
+                  <span style={{ marginLeft: 6, fontSize: 11, color: 'var(--accent)' }}>{gridTerminals.length}/{layout.max} affichés</span>
+                )}
+              </h3>
+              {terminals.some((t) => t.status !== 'running') && (
+                <button onClick={cleanupTerminals} className="cleanup-btn" title="Supprimer les terminaux termines">
+                  Nettoyer
+                </button>
+              )}
+            </div>
+
+            {terminals.length === 0 ? (
+              <div className="card" style={{ textAlign: 'center', padding: 16, color: 'var(--text-secondary)', fontSize: 13 }}>
+                Aucun terminal
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gap: 5 }}>
+                {terminals.map((t) => {
+                  const isActive   = !gridMode && activeTerminal === t.id;
+                  const inGrid     = gridMode && gridTerminals.includes(t.id);
+                  const gridIndex  = gridTerminals.indexOf(t.id);
+
+                  return (
+                    <div
+                      key={t.id}
+                      className="card terminal-card"
+                      style={{
+                        padding: '8px 10px',
+                        cursor: 'pointer',
+                        border: isActive || inGrid ? '2px solid var(--accent)' : '1px solid var(--border)',
+                        borderLeft: `3px solid ${t.status === 'running' ? '#22c55e' : '#ef4444'}`,
+                        opacity: gridMode && gridTerminals.length >= layout.max && !inGrid ? 0.5 : 1,
+                      }}
+                      onClick={() => handleTerminalClick(t.id)}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                        {editingListId === t.id ? (
+                          <form
+                            onSubmit={(e) => { e.preventDefault(); e.stopPropagation(); if (editingListName.trim()) renameTerminal(t.id, editingListName.trim()); setEditingListId(null); }}
+                            onClick={(e) => e.stopPropagation()}
+                            style={{ flex: 1, marginRight: 8 }}
+                          >
+                            <input value={editingListName} onChange={(e) => setEditingListName(e.target.value)} autoFocus
+                              onBlur={() => { if (editingListName.trim()) renameTerminal(t.id, editingListName.trim()); setEditingListId(null); }}
+                              style={{ background: 'rgba(255,255,255,0.1)', border: '1px solid var(--accent)', borderRadius: 4, padding: '2px 6px', color: 'var(--text-primary)', fontSize: 12, fontWeight: 600, width: '100%', boxSizing: 'border-box' }}
+                            />
+                          </form>
+                        ) : (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                            {/* Badge numéro de cellule en mode grille */}
+                            {inGrid && (
+                              <span style={{ fontSize: 10, background: 'var(--accent)', color: 'white', borderRadius: 3, padding: '1px 5px', fontWeight: 700, flexShrink: 0 }}>
+                                {gridIndex + 1}
+                              </span>
+                            )}
+                            <span
+                              style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', cursor: 'text', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                              onDoubleClick={(e) => { e.stopPropagation(); setEditingListId(t.id); setEditingListName(t.name); }}
+                              title="Double-cliquer pour renommer"
+                            >
+                              {t.name}
+                            </span>
+                          </div>
+                        )}
+                        <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexShrink: 0 }}>
+                          <span style={{
+                            fontSize: 9, padding: '1px 6px', borderRadius: 8,
+                            background: t.status === 'running' ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)',
+                            color: t.status === 'running' ? '#22c55e' : '#ef4444',
+                            fontWeight: 700, textTransform: 'uppercase',
+                          }}>
+                            {t.status}
+                          </span>
+                          {t.status === 'running' && (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); killTerminal(t.id); }}
+                              style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 16, padding: '0 2px', lineHeight: 1 }}
+                              title="Arreter"
+                            >
+                              ×
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      <div style={{ fontSize: 10, color: 'var(--text-secondary)', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={t.directory}>
+                        {t.directory}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Panneau droit : vue simple ou grille */}
+        {gridMode ? (
+          // ---- Mode grille ----
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: `repeat(${layout.cols}, 1fr)`,
+            gridTemplateRows:    `repeat(${layout.rows}, 1fr)`,
+            gap: 4,
+            minHeight: 0,
+          }}>
+            {gridCells.map((termId, i) => {
+              if (!termId) return <EmptyCell key={i} index={i} />;
+              const t = terminals.find((x) => x.id === termId);
+              return (
+                <div key={termId} style={{ border: '1px solid var(--border)', borderRadius: 6, overflow: 'hidden', background: '#1a1b26', minHeight: 0 }}>
+                  <TerminalView
+                    terminalId={termId}
+                    terminalName={t?.name}
+                    terminalDirectory={t?.directory}
+                    onClose={() => removeFromGrid(termId)}
+                    onRename={renameTerminal}
+                    compact={layout.cols > 1 || layout.rows > 2}
+                  />
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          // ---- Mode simple ----
+          <div style={{ border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden', background: '#1a1b26', minHeight: 400 }}>
+            {activeTerminal ? (
+              <TerminalView
+                key={activeTerminal}
+                terminalId={activeTerminal}
+                terminalName={terminals.find((t) => t.id === activeTerminal)?.name}
+                terminalDirectory={terminals.find((t) => t.id === activeTerminal)?.directory}
+                onClose={() => setActiveTerminal(null)}
+                onRename={renameTerminal}
+              />
+            ) : (
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#565f89', fontSize: 14 }}>
+                Selectionnez ou lancez un terminal
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      <style>{`
+        .form-input { padding: 7px 10px; background: var(--bg-primary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); font-size: 13px; width: 100%; box-sizing: border-box; }
+        .btn { padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-primary { background: var(--accent); color: white; }
+        .dangerous-label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+        .dangerous-text { font-size: 13px; color: var(--error, #ef4444); font-weight: 600; }
+        .dangerous-hint { font-size: 11px; color: var(--text-secondary); }
+        .cleanup-btn { background: none; border: 1px solid var(--border); border-radius: 6px; padding: 3px 10px; font-size: 11px; cursor: pointer; color: var(--text-secondary); }
+        .cleanup-btn:hover { background: rgba(239,68,68,0.1); color: var(--error, #ef4444); border-color: var(--error, #ef4444); }
+      `}</style>
+    </div>
+  );
+}

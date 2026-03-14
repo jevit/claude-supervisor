@@ -6,7 +6,6 @@ const path = require('path');
 const { WebSocketServer } = require('ws');
 require('dotenv').config();
 
-const agentRoutes = require('./routes/agents');
 const taskRoutes = require('./routes/tasks');
 const sessionRoutes = require('./routes/sessions');
 const { AgentSupervisor } = require('./services/supervisor');
@@ -20,15 +19,12 @@ const { HealthChecker } = require('./services/health-checker');
 const { ConflictDetector } = require('./services/conflict-detector');
 const { SharedContext } = require('./services/shared-context');
 const { EnvWatcher } = require('./services/env-watcher');
-const { NotificationManager } = require('./services/notification-manager');
 const { GitOrchestrator } = require('./services/git-orchestrator');
-const { SupervisorMode } = require('./services/supervisor-mode');
-let IrritantResearcher;
-try {
-  IrritantResearcher = require('./services/agents/irritant-researcher').IrritantResearcher;
-} catch {}
-const irritantRoutes = require('./routes/irritants');
-const supervisorModeRoutes = require('./routes/supervisor-mode');
+const { ApprovalRules } = require('./services/approval-rules');
+const { SquadManager } = require('./services/squad-manager');
+const { TerminalManager } = require('./services/terminal-manager');
+const terminalRoutes = require('./routes/terminals');
+const squadRoutes = require('./routes/squads');
 const timelineRoutes = require('./routes/timeline');
 const lockRoutes = require('./routes/locks');
 const messageRoutes = require('./routes/messages');
@@ -36,7 +32,6 @@ const healthCheckRoutes = require('./routes/health-checks');
 const conflictRoutes = require('./routes/conflicts');
 const contextRoutes = require('./routes/context');
 const envRoutes = require('./routes/env');
-const notificationRoutes = require('./routes/notifications');
 const gitRoutes = require('./routes/git');
 
 const app = express();
@@ -85,24 +80,6 @@ function broadcast(event, data) {
   const source = data?.id || data?.sessionId || data?.agentId || 'system';
   eventLog.log(event, data, source);
 
-  // Generer des notifications pour les evenements importants
-  if (notificationManager) {
-    const notification = notificationManager.processEvent(event, data);
-    if (notification) {
-      // Broadcaster la notification aux dashboards
-      const notifMsg = JSON.stringify({
-        event: 'notification:new',
-        data: notification,
-        timestamp: new Date().toISOString(),
-      });
-      wss.clients.forEach((client) => {
-        if (client.readyState === 1) {
-          client.send(notifMsg);
-        }
-      });
-    }
-  }
-
   // Analyser les conflits apres certains evenements (debounce 500ms)
   if (CONFLICT_TRIGGER_EVENTS.has(event) && conflictDetector) {
     if (_conflictAnalysisTimer) clearTimeout(_conflictAnalysisTimer);
@@ -122,25 +99,17 @@ const healthChecker = new HealthChecker(broadcast, store);
 const conflictDetector = new ConflictDetector(tracker, lockManager, broadcast, store);
 const sharedContext = new SharedContext(broadcast, store);
 const envWatcher = new EnvWatcher(broadcast, store);
-const notificationManager = new NotificationManager(store);
 const gitOrchestrator = new GitOrchestrator(broadcast, store);
+const approvalRules = new ApprovalRules(store);
 
-// Initialiser le mode superviseur
-const supervisorMode = new SupervisorMode(tracker, messageBus, broadcast, store);
+// Initialiser le gestionnaire de terminaux (node-pty)
+const terminalManager = new TerminalManager(tracker, broadcast, store);
 
-// Initialiser l'agent de recherche d'irritants (Anthropic SDK optionnel)
-let irritantResearcher = null;
-try {
-  if (IrritantResearcher) {
-    irritantResearcher = new IrritantResearcher(broadcast);
-    console.log('IrritantResearcher initialise');
-  }
-} catch (err) {
-  console.log('IrritantResearcher non disponible (SDK Anthropic manquant)');
-}
+// Initialiser le squad manager
+const squadManager = new SquadManager(terminalManager, sharedContext, messageBus, broadcast, store);
 
 // Initialiser le protocole WebSocket
-const wsProtocol = new WsProtocol(wss, tracker, broadcast, { lockManager, messageBus });
+const wsProtocol = new WsProtocol(wss, tracker, broadcast, { lockManager, messageBus, approvalRules });
 
 app.locals.supervisor = supervisor;
 app.locals.tracker = tracker;
@@ -154,13 +123,12 @@ app.locals.healthChecker = healthChecker;
 app.locals.conflictDetector = conflictDetector;
 app.locals.sharedContext = sharedContext;
 app.locals.envWatcher = envWatcher;
-app.locals.notificationManager = notificationManager;
 app.locals.gitOrchestrator = gitOrchestrator;
-app.locals.irritantResearcher = irritantResearcher;
-app.locals.supervisorMode = supervisorMode;
+app.locals.approvalRules = approvalRules;
+app.locals.terminalManager = terminalManager;
+app.locals.squadManager = squadManager;
 
 // REST API routes
-app.use('/api/agents', agentRoutes);
 app.use('/api/tasks', taskRoutes);
 app.use('/api/sessions', sessionRoutes);
 app.use('/api/timeline', timelineRoutes);
@@ -170,10 +138,9 @@ app.use('/api/health-checks', healthCheckRoutes);
 app.use('/api/conflicts', conflictRoutes);
 app.use('/api/context', contextRoutes);
 app.use('/api/env', envRoutes);
-app.use('/api/notifications', notificationRoutes);
 app.use('/api/git', gitRoutes);
-app.use('/api/irritants', irritantRoutes);
-app.use('/api/supervisor', supervisorModeRoutes);
+app.use('/api/terminals', terminalRoutes);
+app.use('/api/squads', squadRoutes);
 
 app.get('/api/health', (req, res) => {
   res.json({
@@ -192,6 +159,9 @@ app.get('/api/settings', (req, res) => {
 // Sauvegarder les donnees avant l'arret
 function gracefulShutdown() {
   console.log('Sauvegarde des donnees avant arret...');
+  clearInterval(_staleCheckTimer);
+  squadManager.destroy();
+  terminalManager.destroyAll();
   healthChecker.destroy();
   envWatcher.destroy();
   store.destroy();

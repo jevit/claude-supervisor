@@ -9,21 +9,20 @@ import React, { useState, useEffect } from 'react';
 function BarChart({ data, maxWidth = 200, color = 'var(--accent)' }) {
   const max = Math.max(...data.map((d) => d.value), 1);
   return (
-    <div style={{ display: 'grid', gap: 4 }}>
+    <div className="bar-chart">
       {data.map((d, i) => (
-        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ width: 80, fontSize: 11, color: 'var(--text-secondary)', textAlign: 'right', flexShrink: 0 }}>
+        <div key={i} className="bar-row">
+          <span className="bar-label">
             {d.label}
           </span>
-          <div style={{
-            width: Math.max(2, (d.value / max) * maxWidth),
-            height: 18,
-            background: color,
-            borderRadius: 3,
-            opacity: 0.8,
-            transition: 'width 0.3s',
-          }} />
-          <span style={{ fontSize: 12, color: 'var(--text-primary)', fontWeight: 600 }}>{d.value}</span>
+          <div
+            className="bar-fill"
+            style={{
+              width: Math.max(2, (d.value / max) * maxWidth),
+              background: color,
+            }}
+          />
+          <span className="bar-value">{d.value}</span>
         </div>
       ))}
     </div>
@@ -49,7 +48,7 @@ export default function Analytics() {
     }).catch(() => setLoading(false));
   }, []);
 
-  if (loading) return <div className="card" style={{ textAlign: 'center', padding: 32 }}>Chargement...</div>;
+  if (loading) return <div className="card analytics-loading">Chargement...</div>;
 
   // Stats sessions par statut
   const statusCounts = {};
@@ -101,42 +100,42 @@ export default function Analytics() {
     : 0;
 
   return (
-    <div>
-      <h2>Analytics & Historique</h2>
+    <div className="analytics-page">
+      <h2 className="analytics-header">Analytics & Historique</h2>
 
       {/* Metriques cles */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginBottom: 24 }}>
-        <div className="card" style={{ textAlign: 'center' }}>
-          <div style={{ fontSize: 28, fontWeight: 700, color: 'var(--accent)' }}>{sessions.length}</div>
-          <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Sessions totales</div>
+      <div className="metrics-grid">
+        <div className="card metric-card">
+          <div className="metric-value accent">{sessions.length}</div>
+          <div className="metric-label">Sessions totales</div>
         </div>
-        <div className="card" style={{ textAlign: 'center' }}>
-          <div style={{ fontSize: 28, fontWeight: 700, color: '#22c55e' }}>{statusCounts.active || 0}</div>
-          <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Actives</div>
+        <div className="card metric-card">
+          <div className="metric-value success">{statusCounts.active || 0}</div>
+          <div className="metric-label">Actives</div>
         </div>
-        <div className="card" style={{ textAlign: 'center' }}>
-          <div style={{ fontSize: 28, fontWeight: 700, color: '#eab308' }}>{timeline.length}</div>
-          <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Evenements</div>
+        <div className="card metric-card">
+          <div className="metric-value warning">{timeline.length}</div>
+          <div className="metric-label">Evenements</div>
         </div>
-        <div className="card" style={{ textAlign: 'center' }}>
-          <div style={{ fontSize: 28, fontWeight: 700, color: '#3b82f6' }}>{avgDuration}min</div>
-          <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Duree moy. session</div>
+        <div className="card metric-card">
+          <div className="metric-value info">{avgDuration}min</div>
+          <div className="metric-label">Duree moy. session</div>
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+      <div className="charts-grid">
         {/* Activite par heure */}
-        <div className="card">
-          <h3 style={{ marginBottom: 12 }}>Activite par heure (24h)</h3>
+        <div className="card chart-container">
+          <h3 className="chart-title">Activite par heure (24h)</h3>
           <BarChart
             data={hourActivity.map((v, h) => ({ label: `${String(h).padStart(2, '0')}h`, value: v }))}
-            color="#8b5cf6"
+            color="var(--accent)"
           />
         </div>
 
         {/* Evenements par type */}
-        <div className="card">
-          <h3 style={{ marginBottom: 12 }}>Evenements par type</h3>
+        <div className="card chart-container">
+          <h3 className="chart-title">Evenements par type</h3>
           <BarChart
             data={Object.entries(typeCounts)
               .sort((a, b) => b[1] - a[1])
@@ -147,33 +146,26 @@ export default function Analytics() {
         </div>
 
         {/* Sessions les plus actives */}
-        <div className="card">
-          <h3 style={{ marginBottom: 12 }}>Sessions les plus actives</h3>
+        <div className="card chart-container">
+          <h3 className="chart-title">Sessions les plus actives</h3>
           {sessionActivity.length === 0 ? (
-            <p style={{ color: 'var(--text-secondary)', fontSize: 13 }}>Aucune session</p>
+            <p className="empty-message">Aucune session</p>
           ) : (
-            <BarChart data={sessionActivity} color="#22c55e" />
+            <BarChart data={sessionActivity} color="var(--success)" />
           )}
         </div>
 
         {/* Health checks */}
-        <div className="card">
-          <h3 style={{ marginBottom: 12 }}>Health Checks</h3>
+        <div className="card chart-container">
+          <h3 className="chart-title">Health Checks</h3>
           {hcResults.length === 0 ? (
-            <p style={{ color: 'var(--text-secondary)', fontSize: 13 }}>Aucun health check configure</p>
+            <p className="empty-message">Aucun health check configure</p>
           ) : (
-            <div style={{ display: 'grid', gap: 6 }}>
+            <div className="hc-list">
               {hcResults.map((hc, i) => (
-                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0' }}>
-                  <span style={{ fontSize: 13 }}>{hc.label}</span>
-                  <span style={{
-                    fontSize: 11,
-                    fontWeight: 600,
-                    padding: '2px 8px',
-                    borderRadius: 10,
-                    background: hc.status === 'OK' ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)',
-                    color: hc.status === 'OK' ? '#22c55e' : '#ef4444',
-                  }}>
+                <div key={i} className="hc-row">
+                  <span className="hc-name">{hc.label}</span>
+                  <span className={`hc-badge hc-${hc.status.toLowerCase()}`}>
                     {hc.status}
                   </span>
                 </div>
@@ -184,30 +176,30 @@ export default function Analytics() {
       </div>
 
       {/* Historique des sessions */}
-      <div className="card" style={{ marginTop: 16 }}>
-        <h3 style={{ marginBottom: 12 }}>Historique des sessions</h3>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+      <div className="card history-section">
+        <h3 className="chart-title">Historique des sessions</h3>
+        <table className="history-table">
           <thead>
-            <tr style={{ borderBottom: '1px solid var(--border)' }}>
-              <th style={{ textAlign: 'left', padding: '6px 8px', color: 'var(--text-secondary)' }}>Nom</th>
-              <th style={{ textAlign: 'left', padding: '6px 8px', color: 'var(--text-secondary)' }}>Statut</th>
-              <th style={{ textAlign: 'left', padding: '6px 8px', color: 'var(--text-secondary)' }}>Repertoire</th>
-              <th style={{ textAlign: 'left', padding: '6px 8px', color: 'var(--text-secondary)' }}>Actions</th>
-              <th style={{ textAlign: 'left', padding: '6px 8px', color: 'var(--text-secondary)' }}>Derniere MAJ</th>
+            <tr className="history-thead-row">
+              <th className="history-th">Nom</th>
+              <th className="history-th">Statut</th>
+              <th className="history-th">Repertoire</th>
+              <th className="history-th">Actions</th>
+              <th className="history-th">Derniere MAJ</th>
             </tr>
           </thead>
           <tbody>
             {sessions.map((s) => (
-              <tr key={s.id} style={{ borderBottom: '1px solid var(--border)' }}>
-                <td style={{ padding: '6px 8px' }}>{s.name}</td>
-                <td style={{ padding: '6px 8px' }}>
+              <tr key={s.id} className="history-row">
+                <td className="history-td">{s.name}</td>
+                <td className="history-td">
                   <span className={`status-badge status-${s.status}`}>{s.status}</span>
                 </td>
-                <td style={{ padding: '6px 8px', fontFamily: 'monospace', fontSize: 11, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                <td className="history-td history-td-dir">
                   {s.directory}
                 </td>
-                <td style={{ padding: '6px 8px' }}>{s.history?.length || 0}</td>
-                <td style={{ padding: '6px 8px', fontSize: 11, color: 'var(--text-secondary)' }}>
+                <td className="history-td">{s.history?.length || 0}</td>
+                <td className="history-td history-td-date">
                   {s.lastUpdate ? new Date(s.lastUpdate).toLocaleString() : '-'}
                 </td>
               </tr>
@@ -215,6 +207,62 @@ export default function Analytics() {
           </tbody>
         </table>
       </div>
+
+      {/* Styles scopes pour la page Analytics */}
+      <style>{`
+        .analytics-page { }
+        .analytics-header { margin-bottom: 20px; }
+        .analytics-loading { text-align: center; padding: 32px; }
+
+        /* Grille de metriques */
+        .metrics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 24px; }
+        .metric-card { text-align: center; padding: 16px 12px; }
+        .metric-value { font-size: 28px; font-weight: 700; line-height: 1.2; }
+        .metric-value.accent { color: var(--accent); }
+        .metric-value.success { color: var(--success); }
+        .metric-value.warning { color: var(--warning); }
+        .metric-value.info { color: #3b82f6; }
+        .metric-label { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
+
+        /* Grille de graphiques */
+        .charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+        .chart-container { }
+        .chart-title { margin-bottom: 12px; }
+
+        /* Composant BarChart */
+        .bar-chart { display: grid; gap: 4px; }
+        .bar-row { display: flex; align-items: center; gap: 8px; }
+        .bar-label { width: 80px; font-size: 11px; color: var(--text-secondary); text-align: right; flex-shrink: 0; }
+        .bar-fill { height: 18px; border-radius: 3px; opacity: 0.8; transition: width 0.3s; }
+        .bar-value { font-size: 12px; color: var(--text-primary); font-weight: 600; }
+
+        /* Message vide */
+        .empty-message { color: var(--text-secondary); font-size: 13px; margin: 0; }
+
+        /* Health checks */
+        .hc-list { display: grid; gap: 6px; }
+        .hc-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; }
+        .hc-name { font-size: 13px; color: var(--text-primary); }
+        .hc-badge { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 10px; }
+        .hc-ok { background: rgba(16, 185, 129, 0.15); color: var(--success); }
+        .hc-fail { background: rgba(239, 68, 68, 0.15); color: var(--error); }
+
+        /* Tableau historique */
+        .history-section { margin-top: 16px; }
+        .history-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        .history-thead-row { border-bottom: 1px solid var(--border); }
+        .history-th { text-align: left; padding: 6px 8px; color: var(--text-secondary); font-weight: 600; }
+        .history-row { border-bottom: 1px solid var(--border); }
+        .history-row:hover { background: rgba(255, 255, 255, 0.02); }
+        .history-td { padding: 6px 8px; }
+        .history-td-dir { font-family: 'Cascadia Code', 'Fira Code', Consolas, monospace; font-size: 11px; max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
+        .history-td-date { font-size: 11px; color: var(--text-secondary); }
+
+        /* Responsive: empiler les graphiques sur petit ecran */
+        @media (max-width: 768px) {
+          .charts-grid { grid-template-columns: 1fr; }
+        }
+      `}</style>
     </div>
   );
 }
