@@ -492,8 +492,10 @@ export default function Terminals() {
     }
   }, [searchParams, setSearchParams]);
 
-  // Formulaire de lancement
-  const [directory, setDirectory]         = useState('');
+  // Formulaire de lancement — répertoire pré-rempli avec le dernier utilisé
+  const [directory, setDirectory]         = useState(() => {
+    try { const h = JSON.parse(localStorage.getItem('cs:dir-history') || '[]'); return h[0] || ''; } catch { return ''; }
+  });
   const [name, setName]                   = useState('');
   const [prompt, setPrompt]               = useState('');
   const [model, setModel]                 = useState('');
@@ -522,12 +524,31 @@ export default function Terminals() {
     localStorage.setItem('cs:dir-history', JSON.stringify(next));
   };
 
-  // Fermer le dropdown si clic en dehors
+  // Historique des noms (localStorage)
+  const [nameHistory, setNameHistory] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('cs:name-history') || '[]'); } catch { return []; }
+  });
+  const [nameDropOpen, setNameDropOpen] = useState(false);
+  const nameComboRef = useRef(null);
+
+  const saveNameToHistory = (n) => {
+    if (!n.trim()) return;
+    const next = [n.trim(), ...nameHistory.filter((x) => x !== n.trim())].slice(0, 15);
+    setNameHistory(next);
+    localStorage.setItem('cs:name-history', JSON.stringify(next));
+  };
+
+  const removeNameFromHistory = (n) => {
+    const next = nameHistory.filter((x) => x !== n);
+    setNameHistory(next);
+    localStorage.setItem('cs:name-history', JSON.stringify(next));
+  };
+
+  // Fermer les dropdowns si clic en dehors
   useEffect(() => {
     const handler = (e) => {
-      if (dirComboRef.current && !dirComboRef.current.contains(e.target)) {
-        setDirDropOpen(false);
-      }
+      if (dirComboRef.current && !dirComboRef.current.contains(e.target)) setDirDropOpen(false);
+      if (nameComboRef.current && !nameComboRef.current.contains(e.target)) setNameDropOpen(false);
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
@@ -582,6 +603,7 @@ export default function Terminals() {
           setActiveTerminal(data.terminalId);
         }
         if (directory.trim()) saveDirToHistory(directory.trim());
+        if (name.trim()) saveNameToHistory(name.trim());
         setDirectory(''); setName(''); setPrompt('');
         fetchTerminals();
       }
@@ -787,18 +809,62 @@ export default function Terminals() {
                 </div>
               </div>
 
-              {/* Nom */}
+              {/* Nom — combobox avec historique */}
               <div>
                 <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#565f89', marginBottom: 5, letterSpacing: '0.3px', textTransform: 'uppercase' }}>
                   ✏ Nom <span style={{ fontWeight: 400, textTransform: 'none', fontSize: 10 }}>(optionnel)</span>
                 </label>
-                <input
-                  placeholder="ex: Backend auth"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  className="form-input"
-                  style={{ fontSize: 12 }}
-                />
+                <div ref={nameComboRef} style={{ position: 'relative' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', position: 'relative' }}>
+                    <input
+                      placeholder="ex: Backend auth"
+                      value={name}
+                      onChange={(e) => { setName(e.target.value); setNameDropOpen(true); }}
+                      onFocus={() => nameHistory.length > 0 && setNameDropOpen(true)}
+                      className="form-input"
+                      style={{ fontSize: 12, paddingRight: nameHistory.length > 0 ? 26 : undefined }}
+                    />
+                    {nameHistory.length > 0 && (
+                      <button type="button" onClick={() => setNameDropOpen((v) => !v)} style={{
+                        position: 'absolute', right: 6, background: 'none', border: 'none',
+                        color: '#565f89', cursor: 'pointer', padding: '0 2px', fontSize: 10, lineHeight: 1,
+                      }}>
+                        {nameDropOpen ? '▲' : '▼'}
+                      </button>
+                    )}
+                  </div>
+                  {nameDropOpen && nameHistory.length > 0 && (() => {
+                    const q = name.toLowerCase();
+                    const filtered = nameHistory.filter((n) => !q || n.toLowerCase().includes(q));
+                    if (!filtered.length) return null;
+                    return (
+                      <div style={{
+                        position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 100,
+                        background: '#1f2335', border: '1px solid #3b4261', borderRadius: 6,
+                        boxShadow: '0 8px 24px rgba(0,0,0,0.5)', marginTop: 2,
+                        maxHeight: 180, overflowY: 'auto',
+                      }}>
+                        {filtered.map((n) => (
+                          <div key={n} style={{ display: 'flex', alignItems: 'center', borderBottom: '1px solid #2a2b3d' }}>
+                            <button type="button" onClick={() => { setName(n); setNameDropOpen(false); }}
+                              style={{
+                                flex: 1, background: 'none', border: 'none', color: '#c0caf5',
+                                cursor: 'pointer', padding: '7px 10px', textAlign: 'left',
+                                fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                              }}
+                            >
+                              {n}
+                            </button>
+                            <button type="button" onClick={(e) => { e.stopPropagation(); removeNameFromHistory(n); }}
+                              style={{ background: 'none', border: 'none', color: '#565f89', cursor: 'pointer', padding: '7px 8px', fontSize: 11, flexShrink: 0 }}
+                              title="Retirer de l'historique"
+                            >×</button>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
+                </div>
               </div>
 
               {/* Prompt */}
