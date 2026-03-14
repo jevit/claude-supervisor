@@ -28,10 +28,16 @@ function TerminalView({ terminalId, terminalName, terminalDirectory, onClose, on
   const reconnTimerRef = useRef(null);
   const searchInputRef = useRef(null);
 
-  const [editing,     setEditing]     = useState(false);
-  const [editName,    setEditName]    = useState(terminalName || '');
-  const [showDiff,    setShowDiff]    = useState(false);
-  const [replaying,   setReplaying]   = useState(false);
+  const [editing,           setEditing]           = useState(false);
+  const [editName,          setEditName]          = useState(terminalName || '');
+  const [activeTab,         setActiveTab]         = useState('terminal'); // 'terminal' | 'diff'
+  const [diffEverOpened,    setDiffEverOpened]    = useState(false);
+  const [replaying,         setReplaying]         = useState(false);
+
+  const switchTab = (tab) => {
+    if (tab === 'diff') setDiffEverOpened(true);
+    setActiveTab(tab);
+  };
   const [wsStatus,    setWsStatus]    = useState('connecting');
   const [searchOpen,  setSearchOpen]  = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -211,6 +217,13 @@ function TerminalView({ terminalId, terminalName, terminalDirectory, onClose, on
     }
   }, [searchOpen]);
 
+  /* ── Refit xterm quand on revient sur l'onglet terminal ─────── */
+  useEffect(() => {
+    if (activeTab === 'terminal' && fitAddonRef.current) {
+      requestAnimationFrame(() => fitAddonRef.current?.fit());
+    }
+  }, [activeTab]);
+
   /* ── Lancer la recherche dès que la query/options changent ──── */
   useEffect(() => {
     if (!searchOpen || !searchAddonRef.current) return;
@@ -252,90 +265,72 @@ function TerminalView({ terminalId, terminalName, terminalDirectory, onClose, on
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      {/* Barre de titre */}
+      {/* Barre de titre avec onglets */}
       <div style={{
-        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-        padding: compact ? '3px 8px' : '6px 12px',
+        display: 'flex', alignItems: 'center',
+        padding: compact ? '0 6px' : '0 10px',
         height: headerHeight, boxSizing: 'border-box',
         background: '#1a1b26', borderBottom: '1px solid var(--border)', flexShrink: 0,
+        gap: 6,
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-          {editing ? (
-            <form
-              onSubmit={(e) => { e.preventDefault(); if (editName.trim()) { onRename(terminalId, editName.trim()); setEditing(false); } }}
-              style={{ display: 'flex', gap: 4 }}
-            >
-              <input
-                value={editName}
-                onChange={(e) => setEditName(e.target.value)}
-                autoFocus
-                onBlur={() => { if (editName.trim()) onRename(terminalId, editName.trim()); setEditing(false); }}
-                style={{ background: 'rgba(255,255,255,0.1)', border: '1px solid var(--accent)', borderRadius: 4, padding: '2px 6px', color: '#c0caf5', fontSize: compact ? 11 : 12, fontFamily: 'monospace', width: 150 }}
-              />
-            </form>
-          ) : (
-            <span
-              style={{ fontSize: compact ? 11 : 12, color: '#c0caf5', fontFamily: 'monospace', cursor: 'pointer', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-              onDoubleClick={() => setEditing(true)}
-              title={`${terminalName || terminalId} — double-cliquer pour renommer`}
-            >
-              {terminalName || `Terminal ${terminalId?.substring(0, 8)}`}
-            </span>
-          )}
-          {!compact && (
-            <span style={{ fontSize: 10, color: '#565f89', fontFamily: 'monospace', flexShrink: 0 }}>
-              {terminalId?.substring(0, 8)}
-            </span>
-          )}
-        </div>
-        <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexShrink: 0 }}>
-          {/* Indicateur connexion WS */}
+        {/* Gauche : dot WS + nom */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 0, flex: 1 }}>
           <span
-            title={replaying ? 'Replay en cours…' : wsStatus === 'open' ? 'Connecté' : wsStatus === 'connecting' ? 'Reconnexion…' : 'Déconnecté'}
+            title={replaying ? 'Replay…' : wsStatus === 'open' ? 'Connecté' : wsStatus === 'connecting' ? 'Reconnexion…' : 'Déconnecté'}
             style={{
-              display: 'inline-block', width: 7, height: 7, borderRadius: '50%', flexShrink: 0,
-              background: replaying
-                ? '#f59e0b'
-                : wsStatus === 'open' ? '#22c55e'
-                : wsStatus === 'connecting' ? '#f59e0b'
-                : '#ef4444',
+              width: 7, height: 7, borderRadius: '50%', flexShrink: 0, display: 'inline-block',
+              background: replaying ? '#f59e0b' : wsStatus === 'open' ? '#22c55e' : wsStatus === 'connecting' ? '#f59e0b' : '#ef4444',
               animation: (wsStatus !== 'open' || replaying) ? 'ws-blink 1s ease-in-out infinite' : 'none',
             }}
           />
-          {/* Bouton recherche */}
-          <button
-            onClick={() => setSearchOpen((v) => !v)}
-            title="Rechercher (Ctrl+F)"
-            style={{
-              background: searchOpen ? 'rgba(139,92,246,0.25)' : 'none',
-              color: searchOpen ? '#8b5cf6' : '#c0caf5',
-              border: '1px solid var(--border)', borderRadius: 4,
-              padding: compact ? '1px 5px' : '2px 7px',
-              cursor: 'pointer', fontSize: compact ? 10 : 11, fontWeight: 600,
-            }}
-          >
-            🔍
-          </button>
-          <button
-            onClick={() => setShowDiff(v => !v)}
-            style={{
-              background: showDiff ? 'var(--accent)' : 'none',
-              color: showDiff ? 'white' : '#c0caf5',
-              border: '1px solid var(--border)', borderRadius: 4,
-              padding: compact ? '1px 5px' : '2px 8px',
-              cursor: 'pointer', fontSize: compact ? 10 : 11,
-              fontFamily: 'monospace', fontWeight: 600,
-            }}
-            title={showDiff ? 'Retour au terminal' : 'Voir le diff Git'}
-          >
-            {showDiff ? '>_' : '±'}
-          </button>
-          <button
-            onClick={onClose}
-            style={{ background: '#ef4444', color: 'white', border: 'none', borderRadius: 4, padding: compact ? '1px 6px' : '2px 10px', cursor: 'pointer', fontSize: compact ? 10 : 11 }}
-          >
-            ×
-          </button>
+          {editing ? (
+            <form onSubmit={(e) => { e.preventDefault(); if (editName.trim()) { onRename(terminalId, editName.trim()); setEditing(false); } }} style={{ display: 'flex' }}>
+              <input value={editName} onChange={(e) => setEditName(e.target.value)} autoFocus
+                onBlur={() => { if (editName.trim()) onRename(terminalId, editName.trim()); setEditing(false); }}
+                style={{ background: 'rgba(255,255,255,0.1)', border: '1px solid var(--accent)', borderRadius: 4, padding: '1px 6px', color: '#c0caf5', fontSize: compact ? 10 : 12, fontFamily: 'monospace', width: 130 }}
+              />
+            </form>
+          ) : (
+            <span onDoubleClick={() => setEditing(true)} title="Double-cliquer pour renommer"
+              style={{ fontSize: compact ? 10 : 12, color: '#c0caf5', fontFamily: 'monospace', cursor: 'text', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {terminalName || `Terminal ${terminalId?.substring(0, 8)}`}
+            </span>
+          )}
+        </div>
+
+        {/* Centre : onglets >_ Terminal | ⎇ Git Diff */}
+        <div style={{ display: 'flex', flexShrink: 0, border: '1px solid #2a2b3d', borderRadius: 5, overflow: 'hidden' }}>
+          {[
+            { id: 'terminal', label: compact ? '>_' : '>_ Terminal' },
+            { id: 'diff',     label: compact ? '⎇'  : '⎇ Git Diff'  },
+          ].map((tab) => (
+            <button key={tab.id} onClick={() => switchTab(tab.id)} style={{
+              background: activeTab === tab.id ? 'rgba(139,92,246,0.2)' : 'transparent',
+              color: activeTab === tab.id ? '#c0caf5' : '#565f89',
+              border: 'none',
+              borderBottom: activeTab === tab.id ? '2px solid #8b5cf6' : '2px solid transparent',
+              borderRight: tab.id === 'terminal' ? '1px solid #2a2b3d' : 'none',
+              padding: compact ? '0 7px' : '0 11px',
+              height: '100%', cursor: 'pointer',
+              fontSize: compact ? 10 : 11,
+              fontFamily: 'monospace', fontWeight: activeTab === tab.id ? 700 : 400,
+              transition: 'background 0.15s, color 0.15s',
+            }}>
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Droite : recherche + fermer */}
+        <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexShrink: 0 }}>
+          <button onClick={() => setSearchOpen((v) => !v)} title="Rechercher (Ctrl+F)" style={{
+            background: searchOpen ? 'rgba(139,92,246,0.25)' : 'none',
+            color: searchOpen ? '#8b5cf6' : '#c0caf5',
+            border: '1px solid var(--border)', borderRadius: 4,
+            padding: compact ? '1px 5px' : '2px 7px',
+            cursor: 'pointer', fontSize: compact ? 10 : 11, fontWeight: 600,
+          }}>🔍</button>
+          <button onClick={onClose} style={{ background: '#ef4444', color: 'white', border: 'none', borderRadius: 4, padding: compact ? '1px 6px' : '2px 10px', cursor: 'pointer', fontSize: compact ? 10 : 11 }}>×</button>
         </div>
       </div>
 
@@ -386,14 +381,17 @@ function TerminalView({ terminalId, terminalName, terminalDirectory, onClose, on
         </div>
       )}
 
-      {/* Corps : terminal ou diff */}
-      {showDiff ? (
-        <div style={{ flex: 1, overflow: 'hidden' }}>
-          <GitDiffPanel terminalId={terminalId} directory={terminalDirectory} onClose={() => setShowDiff(false)} />
-        </div>
-      ) : (
-        <div ref={containerRef} style={{ flex: 1, overflow: 'hidden' }} />
-      )}
+      {/* Corps : les deux panneaux coexistent — display:none évite de détruire xterm */}
+      <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
+        {/* Terminal xterm — toujours monté */}
+        <div ref={containerRef} style={{ position: 'absolute', inset: 0, display: activeTab === 'terminal' ? 'block' : 'none' }} />
+        {/* Git Diff — monté au premier clic, puis persistant */}
+        {diffEverOpened && (
+          <div style={{ position: 'absolute', inset: 0, display: activeTab === 'diff' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
+            <GitDiffPanel terminalId={terminalId} directory={terminalDirectory} onClose={null} />
+          </div>
+        )}
+      </div>
     </div>
   );
 }
