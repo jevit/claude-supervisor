@@ -34,8 +34,18 @@ function parseGitStatus(raw) {
 
 // Diff generique pour n'importe quel repertoire
 router.post('/diff', async (req, res) => {
-  const { directory } = req.body;
+  const { directory, commitHash } = req.body;
   if (!directory) return res.status(400).json({ error: 'directory requis' });
+
+  // Si un hash de commit est fourni, retourner le diff de ce commit uniquement
+  if (commitHash) {
+    try {
+      const commitDiff = await runGitCmd(['show', '--stat', '--patch', commitHash], directory);
+      return res.json({ commitDiff });
+    } catch (err) {
+      return res.status(500).json({ error: err.message });
+    }
+  }
   try {
     const [statusRaw, diffUnstaged, diffStaged] = await Promise.all([
       runGitCmd(['status', '--porcelain'], directory),

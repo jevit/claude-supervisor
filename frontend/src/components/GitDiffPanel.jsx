@@ -56,6 +56,50 @@ function statusIcon(status) {
   }
 }
 
+/* ── Diff d'un commit spécifique ─────────────────────────────────── */
+function CommitDiff({ hash, directory }) {
+  const [diff, setDiff]     = useState('');
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!hash || !directory) return;
+    fetch('/api/git/diff', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ directory, commitHash: hash }),
+    })
+      .then(r => r.json())
+      .then(d => { setDiff(d.commitDiff || ''); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, [hash, directory]);
+
+  if (loading) return <div style={{ padding: 16, color: '#565f89', fontSize: 12 }}>Chargement…</div>;
+  if (!diff) return <div style={{ padding: 16, color: '#565f89', fontSize: 12 }}>Pas de diff disponible</div>;
+
+  return (
+    <pre style={{
+      margin: 0, padding: '8px 12px', fontFamily: 'monospace', fontSize: 11,
+      color: '#c0caf5', whiteSpace: 'pre-wrap', wordBreak: 'break-all', lineHeight: 1.5,
+    }}>
+      {diff.split('\n').map((line, i) => (
+        <span key={i} style={{
+          display: 'block',
+          color: line.startsWith('+') && !line.startsWith('+++') ? '#4ade80'
+               : line.startsWith('-') && !line.startsWith('---') ? '#f87171'
+               : line.startsWith('@@') ? '#8b5cf6'
+               : line.startsWith('diff ') || line.startsWith('index ') ? '#565f89'
+               : '#c0caf5',
+          background: line.startsWith('+') && !line.startsWith('+++') ? 'rgba(16,185,129,0.06)'
+                    : line.startsWith('-') && !line.startsWith('---') ? 'rgba(239,68,68,0.06)'
+                    : 'transparent',
+        }}>
+          {line || ' '}
+        </span>
+      ))}
+    </pre>
+  );
+}
+
 export default function GitDiffPanel({ directory, terminalId, onClose }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -99,8 +143,9 @@ export default function GitDiffPanel({ directory, terminalId, onClose }) {
 
   useEffect(() => { fetchDiff(); }, [fetchDiff]);
 
-  // Fichier actuellement selectionne
-  const currentFile = data?.files?.find(f => f.path === selectedFile);
+  // Fichier actuellement sélectionné (exclure les refs de commit __commit__xxx)
+  const isCommitRef = selectedFile?.startsWith('__commit__');
+  const currentFile = !isCommitRef ? data?.files?.find(f => f.path === selectedFile) : null;
   const hunks = currentFile ? parseDiff(currentFile.diff) : [];
 
   return (
@@ -138,69 +183,91 @@ export default function GitDiffPanel({ directory, terminalId, onClose }) {
         </div>
       )}
 
-      {!loading && !error && data && data.files?.length === 0 && (
-        <div className="gdp-center gdp-clean-state">
-          <span className="gdp-clean-icon">✓</span>
-          <span>Aucun changement - repertoire propre</span>
-        </div>
-      )}
-
-      {!loading && !error && data && data.files?.length > 0 && (
+      {!loading && !error && data && (
         <>
-          {/* Barre de resume */}
+          {/* Barre de résumé */}
           <div className="gdp-summary">
-            {data.summary.modified > 0 && (
-              <span className="gdp-badge gdp-badge-modified">{data.summary.modified} modifie(s)</span>
+            {data.currentBranch && (
+              <span className="gdp-badge" style={{ background: 'rgba(139,92,246,0.15)', color: '#8b5cf6' }}>
+                ⎇ {data.currentBranch}
+              </span>
             )}
-            {data.summary.added > 0 && (
-              <span className="gdp-badge gdp-badge-added">{data.summary.added} ajoute(s)</span>
+            {data.files?.length === 0 ? (
+              <span className="gdp-badge" style={{ background: 'rgba(16,185,129,0.15)', color: '#10b981' }}>✓ Working tree propre</span>
+            ) : (
+              <>
+                {data.summary?.modified > 0 && <span className="gdp-badge gdp-badge-modified">{data.summary.modified} modifié(s)</span>}
+                {data.summary?.added > 0    && <span className="gdp-badge gdp-badge-added">{data.summary.added} ajouté(s)</span>}
+                {data.summary?.deleted > 0  && <span className="gdp-badge gdp-badge-deleted">{data.summary.deleted} supprimé(s)</span>}
+                {data.summary?.untracked > 0 && <span className="gdp-badge gdp-badge-untracked">{data.summary.untracked} non-suivi(s)</span>}
+                <span className="gdp-file-count">{data.files.length} fichier(s)</span>
+              </>
             )}
-            {data.summary.deleted > 0 && (
-              <span className="gdp-badge gdp-badge-deleted">{data.summary.deleted} supprime(s)</span>
-            )}
-            {data.summary.untracked > 0 && (
-              <span className="gdp-badge gdp-badge-untracked">{data.summary.untracked} non-suivi(s)</span>
-            )}
-            <span className="gdp-file-count">{data.files.length} fichier(s)</span>
           </div>
 
-          {/* Panneau principal : liste + diff */}
+          {/* Panneau principal : fichiers à gauche, diff/commits à droite */}
           <div className="gdp-main">
-            {/* Liste des fichiers */}
+            {/* Colonne gauche : fichiers modifiés + commits */}
             <div className="gdp-file-list">
-              {data.files.map(f => {
-                const icon = statusIcon(f.status);
-                const isActive = selectedFile === f.path;
-                return (
-                  <div
-                    key={f.path}
-                    className={`gdp-file-item ${isActive ? 'gdp-file-active' : ''}`}
-                    onClick={() => setSelectedFile(f.path)}
-                    title={f.path}
-                  >
-                    <span className="gdp-file-status" style={{ color: icon.color, background: icon.color + '20' }}>
-                      {icon.letter}
-                    </span>
-                    <span className="gdp-file-name">{f.path.split('/').pop()}</span>
-                    <span className="gdp-file-path">{f.path.includes('/') ? f.path.substring(0, f.path.lastIndexOf('/')) : ''}</span>
+              {/* Fichiers modifiés */}
+              {data.files?.length > 0 && (
+                <>
+                  <div className="gdp-list-section-title">Fichiers modifiés</div>
+                  {data.files.map(f => {
+                    const icon = statusIcon(f.status);
+                    const isActive = selectedFile === f.path;
+                    return (
+                      <div
+                        key={f.path}
+                        className={`gdp-file-item ${isActive ? 'gdp-file-active' : ''}`}
+                        onClick={() => setSelectedFile(f.path)}
+                        title={f.path}
+                      >
+                        <span className="gdp-file-status" style={{ color: icon.color, background: icon.color + '20' }}>
+                          {icon.letter}
+                        </span>
+                        <span className="gdp-file-name">{f.path.split(/[/\\]/).pop()}</span>
+                      </div>
+                    );
+                  })}
+                </>
+              )}
+              {/* Commits récents */}
+              {data.recentCommits?.length > 0 && (
+                <>
+                  <div className="gdp-list-section-title" style={{ marginTop: data.files?.length > 0 ? 8 : 0 }}>
+                    Historique ({data.recentCommits.length})
                   </div>
-                );
-              })}
+                  {data.recentCommits.map((c) => (
+                    <div
+                      key={c.hash}
+                      className={`gdp-commit-item ${selectedFile === `__commit__${c.hash}` ? 'gdp-file-active' : ''}`}
+                      onClick={() => setSelectedFile(`__commit__${c.hash}`)}
+                      title={c.message}
+                    >
+                      <code className="gdp-commit-hash">{c.hash}</code>
+                      <span className="gdp-commit-msg">{c.message}</span>
+                    </div>
+                  ))}
+                </>
+              )}
+              {data.files?.length === 0 && !data.recentCommits?.length && (
+                <div className="gdp-center" style={{ padding: 24, fontSize: 12 }}>Aucun historique</div>
+              )}
             </div>
 
             {/* Vue du diff */}
             <div className="gdp-diff-view">
               {!selectedFile && (
-                <div className="gdp-center" style={{ color: '#565f89' }}>
-                  Selectionnez un fichier
+                <div className="gdp-center" style={{ color: '#565f89', flexDirection: 'column', gap: 6 }}>
+                  <span style={{ fontSize: 24, opacity: 0.3 }}>⎇</span>
+                  <span>Sélectionnez un fichier ou un commit</span>
                 </div>
               )}
-              {selectedFile && hunks.length === 0 && (
-                <div className="gdp-center" style={{ color: '#565f89' }}>
-                  Pas de diff disponible pour ce fichier
-                </div>
+              {selectedFile && !selectedFile.startsWith('__commit__') && hunks.length === 0 && (
+                <div className="gdp-center" style={{ color: '#565f89' }}>Pas de diff pour ce fichier</div>
               )}
-              {selectedFile && hunks.length > 0 && (
+              {selectedFile && !selectedFile.startsWith('__commit__') && hunks.length > 0 && (
                 <div className="gdp-diff-content">
                   <div className="gdp-diff-file-header">{selectedFile}</div>
                   {hunks.map((hunk, hi) => (
@@ -208,15 +275,9 @@ export default function GitDiffPanel({ directory, terminalId, onClose }) {
                       <div className="gdp-hunk-header">{hunk.header}</div>
                       {hunk.lines.map((line, li) => (
                         <div key={li} className={`gdp-diff-line gdp-line-${line.type}`}>
-                          <span className="gdp-line-num gdp-line-num-old">
-                            {line.oldNum ?? ''}
-                          </span>
-                          <span className="gdp-line-num gdp-line-num-new">
-                            {line.newNum ?? ''}
-                          </span>
-                          <span className="gdp-line-sign">
-                            {line.type === 'add' ? '+' : line.type === 'del' ? '-' : ' '}
-                          </span>
+                          <span className="gdp-line-num gdp-line-num-old">{line.oldNum ?? ''}</span>
+                          <span className="gdp-line-num gdp-line-num-new">{line.newNum ?? ''}</span>
+                          <span className="gdp-line-sign">{line.type === 'add' ? '+' : line.type === 'del' ? '-' : ' '}</span>
                           <span className="gdp-line-content">{line.content}</span>
                         </div>
                       ))}
@@ -224,6 +285,19 @@ export default function GitDiffPanel({ directory, terminalId, onClose }) {
                   ))}
                 </div>
               )}
+              {selectedFile?.startsWith('__commit__') && (() => {
+                const hash = selectedFile.replace('__commit__', '');
+                const commit = data.recentCommits?.find(c => c.hash === hash);
+                return (
+                  <div className="gdp-diff-content">
+                    <div className="gdp-diff-file-header" style={{ display: 'flex', gap: 10 }}>
+                      <code style={{ color: '#8b5cf6' }}>{hash}</code>
+                      <span>{commit?.message}</span>
+                    </div>
+                    <CommitDiff hash={hash} directory={directory} />
+                  </div>
+                );
+              })()}
             </div>
           </div>
         </>
@@ -361,7 +435,31 @@ export default function GitDiffPanel({ directory, terminalId, onClose }) {
           overflow: hidden;
         }
 
-        /* Liste des fichiers */
+        /* Liste des fichiers + commits */
+        .gdp-list-section-title {
+          padding: 6px 10px 4px;
+          font-size: 10px;
+          font-weight: 700;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+          color: #565f89;
+          background: rgba(255,255,255,0.02);
+          border-bottom: 1px solid rgba(45,49,72,0.5);
+        }
+        .gdp-commit-item {
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+          padding: 6px 10px;
+          cursor: pointer;
+          border-bottom: 1px solid rgba(45,49,72,0.5);
+          transition: background 0.1s;
+          overflow: hidden;
+        }
+        .gdp-commit-item:hover { background: rgba(255,255,255,0.04); }
+        .gdp-commit-hash { font-size: 10px; color: #8b5cf6; font-family: monospace; flex-shrink: 0; }
+        .gdp-commit-msg { font-size: 11px; color: #9ca3af; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
         .gdp-file-list {
           width: 240px;
           min-width: 200px;

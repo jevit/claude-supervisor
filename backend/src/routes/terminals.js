@@ -150,9 +150,7 @@ async function getFullDiff(directory) {
   for (const f of files) {
     try {
       if (f.status === 'untracked') {
-        // Pour les fichiers non-suivis, montrer le contenu complet
-        const content = await runGit(['diff', '--no-index', '/dev/null', f.path], directory);
-        f.diff = content;
+        f.diff = await runGit(['diff', '--no-index', 'NUL', f.path], directory).catch(() => '');
       } else {
         const fileDiff = await runGit(['diff', 'HEAD', '--', f.path], directory);
         f.diff = fileDiff || await runGit(['diff', '--cached', '--', f.path], directory);
@@ -162,7 +160,19 @@ async function getFullDiff(directory) {
     }
   }
 
-  return { files, summary, combinedDiff };
+  // Derniers commits pour contexte (branch, historique)
+  let recentCommits = [];
+  let currentBranch = '';
+  try {
+    const logRaw = await runGit(['log', '--oneline', '-10', '--decorate'], directory);
+    recentCommits = logRaw.split('\n').filter(Boolean).map((line) => {
+      const [hash, ...rest] = line.split(' ');
+      return { hash, message: rest.join(' ') };
+    });
+    currentBranch = (await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], directory)).trim();
+  } catch {}
+
+  return { files, summary, combinedDiff, recentCommits, currentBranch };
 }
 
 // Git diff pour un terminal specifique
