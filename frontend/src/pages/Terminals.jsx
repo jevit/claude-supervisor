@@ -500,6 +500,7 @@ export default function Terminals() {
   const [dangerousMode, setDangerousMode] = useState(false);
   const [injectContext, setInjectContext] = useState(true);
   const [contextCount, setContextCount]   = useState(0);
+  const [showAdvanced, setShowAdvanced]   = useState(false);
 
   // Historique des répertoires (localStorage)
   const [dirHistory, setDirHistory] = useState(() => {
@@ -710,93 +711,235 @@ export default function Terminals() {
         {/* Panneau gauche : formulaire + liste */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, overflow: 'auto' }}>
           {/* Formulaire de lancement */}
-          <div className="card">
-            <h3 style={{ marginBottom: 10, fontSize: 13 }}>Lancer un terminal</h3>
-            <form onSubmit={spawnTerminal} style={{ display: 'grid', gap: 7 }}>
-              {/* Répertoire — combobox avec historique */}
-              <div ref={dirComboRef} style={{ position: 'relative' }}>
-                <div style={{ display: 'flex', alignItems: 'center', position: 'relative' }}>
-                  <input
-                    placeholder="Répertoire (ex: C:/mon-projet)"
-                    value={directory}
-                    onChange={(e) => { setDirectory(e.target.value); setDirDropOpen(true); }}
-                    onFocus={() => dirHistory.length > 0 && setDirDropOpen(true)}
-                    className="form-input"
-                    style={{ paddingRight: 26 }}
-                  />
-                  {/* Chevron toggle */}
-                  {dirHistory.length > 0 && (
-                    <button type="button" onClick={() => setDirDropOpen((v) => !v)} style={{
-                      position: 'absolute', right: 6, background: 'none', border: 'none',
-                      color: '#565f89', cursor: 'pointer', padding: '0 2px', fontSize: 10, lineHeight: 1,
-                    }}>
-                      {dirDropOpen ? '▲' : '▼'}
-                    </button>
-                  )}
-                </div>
-                {/* Dropdown */}
-                {dirDropOpen && dirHistory.length > 0 && (() => {
-                  const q = directory.toLowerCase();
-                  const filtered = dirHistory.filter((d) => !q || d.toLowerCase().includes(q));
-                  if (!filtered.length) return null;
-                  return (
-                    <div style={{
-                      position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 100,
-                      background: '#1f2335', border: '1px solid #3b4261', borderRadius: 6,
-                      boxShadow: '0 8px 24px rgba(0,0,0,0.5)', marginTop: 2,
-                      maxHeight: 220, overflowY: 'auto',
-                    }}>
-                      {filtered.map((d) => (
-                        <div key={d} style={{ display: 'flex', alignItems: 'center', borderBottom: '1px solid #2a2b3d' }}>
-                          <button type="button" onClick={() => { setDirectory(d); setDirDropOpen(false); }}
-                            style={{
-                              flex: 1, background: 'none', border: 'none', color: '#c0caf5',
-                              cursor: 'pointer', padding: '7px 10px', textAlign: 'left',
-                              fontSize: 11, fontFamily: 'monospace',
-                              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                            }}
-                            title={d}
-                          >
-                            <span style={{ color: '#565f89', marginRight: 4 }}>📁</span>
-                            {d}
-                          </button>
-                          <button type="button" onClick={(e) => { e.stopPropagation(); removeDirFromHistory(d); }}
-                            style={{
-                              background: 'none', border: 'none', color: '#565f89',
-                              cursor: 'pointer', padding: '7px 8px', fontSize: 11,
-                              flexShrink: 0, lineHeight: 1,
-                            }}
-                            title="Supprimer de l'historique"
-                          >×</button>
-                        </div>
-                      ))}
-                    </div>
-                  );
-                })()}
+          <div className="card" style={{ padding: 0, overflow: 'visible' }}>
+            {/* En-tête du formulaire */}
+            <div style={{ padding: '12px 14px 10px', borderBottom: '1px solid rgba(45,49,72,0.6)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                <span style={{ fontSize: 15 }}>▶</span>
+                <span style={{ fontSize: 13, fontWeight: 700, color: '#c0caf5' }}>Nouvelle session</span>
+                {!available && (
+                  <span style={{ marginLeft: 'auto', fontSize: 10, color: '#ef4444', background: 'rgba(239,68,68,0.1)', padding: '2px 7px', borderRadius: 10, fontWeight: 600 }}>
+                    node-pty indisponible
+                  </span>
+                )}
               </div>
-              <input placeholder="Nom (optionnel)" value={name} onChange={(e) => setName(e.target.value)} className="form-input" />
-              <textarea placeholder="Prompt initial (optionnel)" value={prompt} onChange={(e) => setPrompt(e.target.value)} className="form-input" rows={2} style={{ resize: 'vertical' }} />
-              <select value={model} onChange={(e) => setModel(e.target.value)} className="form-input">
-                <option value="">Modele par defaut</option>
-                <option value="sonnet">Sonnet</option>
-                <option value="opus">Opus</option>
-                <option value="haiku">Haiku</option>
-              </select>
-              <label className="dangerous-label" title={`Ajoute automatiquement le Contexte Partagé au début du prompt initial de Claude.\n\nChaque entrée (clé: valeur) est injectée sous la forme :\n=== CONTEXTE PARTAGE ===\n- conventions/commits: feat:, fix:…\n- stack/node: v20 LTS\n========================\n\nCela permet à Claude de connaître les conventions du projet dès le démarrage, sans avoir à les répéter à la main.\n\n${contextCount > 0 ? `${contextCount} entrée${contextCount > 1 ? 's' : ''} actuellement dans le contexte.` : 'Aucune entrée dans le contexte partagé pour le moment.'}`}>
-                <input type="checkbox" checked={injectContext} onChange={(e) => setInjectContext(e.target.checked)} />
-                <span style={{ fontSize: 13, color: 'var(--text-primary)', fontWeight: 600 }}>Injecter le contexte</span>
-                <span className="dangerous-hint">
-                  {contextCount > 0 ? `(${contextCount} entrée${contextCount > 1 ? 's' : ''})` : '(vide)'}
-                </span>
-              </label>
-              <label className="dangerous-label">
-                <input type="checkbox" checked={dangerousMode} onChange={(e) => setDangerousMode(e.target.checked)} />
-                <span className="dangerous-text">Mode dangereux</span>
-                <span className="dangerous-hint">(skip permissions)</span>
-              </label>
-              <button type="submit" className="btn btn-primary" disabled={!available}>
+            </div>
+
+            <form onSubmit={spawnTerminal} style={{ padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 11 }}>
+
+              {/* Répertoire */}
+              <div>
+                <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#565f89', marginBottom: 5, letterSpacing: '0.3px', textTransform: 'uppercase' }}>
+                  📁 Répertoire
+                </label>
+                <div ref={dirComboRef} style={{ position: 'relative' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', position: 'relative' }}>
+                    <input
+                      placeholder="C:/mon-projet"
+                      value={directory}
+                      onChange={(e) => { setDirectory(e.target.value); setDirDropOpen(true); }}
+                      onFocus={() => dirHistory.length > 0 && setDirDropOpen(true)}
+                      className="form-input"
+                      style={{ paddingRight: dirHistory.length > 0 ? 26 : undefined, fontFamily: 'monospace', fontSize: 12 }}
+                    />
+                    {dirHistory.length > 0 && (
+                      <button type="button" onClick={() => setDirDropOpen((v) => !v)} style={{
+                        position: 'absolute', right: 6, background: 'none', border: 'none',
+                        color: '#565f89', cursor: 'pointer', padding: '0 2px', fontSize: 10, lineHeight: 1,
+                      }}>
+                        {dirDropOpen ? '▲' : '▼'}
+                      </button>
+                    )}
+                  </div>
+                  {dirDropOpen && dirHistory.length > 0 && (() => {
+                    const q = directory.toLowerCase();
+                    const filtered = dirHistory.filter((d) => !q || d.toLowerCase().includes(q));
+                    if (!filtered.length) return null;
+                    return (
+                      <div style={{
+                        position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 100,
+                        background: '#1f2335', border: '1px solid #3b4261', borderRadius: 6,
+                        boxShadow: '0 8px 24px rgba(0,0,0,0.5)', marginTop: 2,
+                        maxHeight: 200, overflowY: 'auto',
+                      }}>
+                        {filtered.map((d) => (
+                          <div key={d} style={{ display: 'flex', alignItems: 'center', borderBottom: '1px solid #2a2b3d' }}>
+                            <button type="button" onClick={() => { setDirectory(d); setDirDropOpen(false); }}
+                              style={{
+                                flex: 1, background: 'none', border: 'none', color: '#c0caf5',
+                                cursor: 'pointer', padding: '7px 10px', textAlign: 'left',
+                                fontSize: 11, fontFamily: 'monospace',
+                                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                              }}
+                              title={d}
+                            >
+                              <span style={{ color: '#565f89', marginRight: 5 }}>📁</span>{d}
+                            </button>
+                            <button type="button" onClick={(e) => { e.stopPropagation(); removeDirFromHistory(d); }}
+                              style={{ background: 'none', border: 'none', color: '#565f89', cursor: 'pointer', padding: '7px 8px', fontSize: 11, flexShrink: 0 }}
+                              title="Retirer de l'historique"
+                            >×</button>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
+                </div>
+              </div>
+
+              {/* Nom */}
+              <div>
+                <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#565f89', marginBottom: 5, letterSpacing: '0.3px', textTransform: 'uppercase' }}>
+                  ✏ Nom <span style={{ fontWeight: 400, textTransform: 'none', fontSize: 10 }}>(optionnel)</span>
+                </label>
+                <input
+                  placeholder="ex: Backend auth"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  className="form-input"
+                  style={{ fontSize: 12 }}
+                />
+              </div>
+
+              {/* Prompt */}
+              <div>
+                <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#565f89', marginBottom: 5, letterSpacing: '0.3px', textTransform: 'uppercase' }}>
+                  💬 Prompt initial <span style={{ fontWeight: 400, textTransform: 'none', fontSize: 10 }}>(optionnel)</span>
+                </label>
+                <textarea
+                  placeholder="Décris la tâche à accomplir…"
+                  value={prompt}
+                  onChange={(e) => setPrompt(e.target.value)}
+                  className="form-input"
+                  rows={2}
+                  style={{ resize: 'vertical', fontSize: 12, lineHeight: 1.5 }}
+                />
+              </div>
+
+              {/* Options avancées — pliables */}
+              <div>
+                <button
+                  type="button"
+                  onClick={() => setShowAdvanced((v) => !v)}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 6, width: '100%',
+                    background: 'none', border: 'none', padding: '4px 0', cursor: 'pointer',
+                    color: '#565f89', fontSize: 11, fontWeight: 600, letterSpacing: '0.3px',
+                    textTransform: 'uppercase',
+                  }}
+                >
+                  <span style={{ fontSize: 9, transition: 'transform 0.2s', display: 'inline-block', transform: showAdvanced ? 'rotate(90deg)' : 'rotate(0deg)' }}>▶</span>
+                  Options avancées
+                  {(model || dangerousMode || !injectContext) && (
+                    <span style={{ marginLeft: 4, width: 6, height: 6, borderRadius: '50%', background: '#8b5cf6', display: 'inline-block', flexShrink: 0 }} />
+                  )}
+                </button>
+
+                {showAdvanced && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 8, paddingTop: 8, borderTop: '1px solid rgba(45,49,72,0.5)' }}>
+
+                    {/* Modèle — chips */}
+                    <div>
+                      <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#565f89', marginBottom: 6, letterSpacing: '0.3px', textTransform: 'uppercase' }}>
+                        🤖 Modèle
+                      </label>
+                      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                        {[
+                          { value: '',       label: 'Défaut' },
+                          { value: 'sonnet', label: 'Sonnet' },
+                          { value: 'opus',   label: 'Opus'   },
+                          { value: 'haiku',  label: 'Haiku'  },
+                        ].map((m) => (
+                          <button
+                            key={m.value}
+                            type="button"
+                            onClick={() => setModel(m.value)}
+                            style={{
+                              padding: '4px 10px', borderRadius: 20,
+                              border: model === m.value ? '1px solid rgba(139,92,246,0.6)' : '1px solid #2d3148',
+                              background: model === m.value ? 'rgba(139,92,246,0.2)' : 'rgba(255,255,255,0.03)',
+                              color: model === m.value ? '#8b5cf6' : '#6b7280',
+                              cursor: 'pointer', fontSize: 11, fontWeight: model === m.value ? 700 : 400,
+                              transition: 'all 0.15s',
+                            }}
+                          >
+                            {m.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Injecter le contexte */}
+                    <label style={{ display: 'flex', alignItems: 'flex-start', gap: 9, cursor: 'pointer' }}
+                      title={`Injecte le Contexte Partagé (${contextCount} entrée${contextCount !== 1 ? 's' : ''}) dans le prompt initial.`}
+                    >
+                      <div
+                        onClick={() => setInjectContext((v) => !v)}
+                        style={{
+                          width: 30, height: 16, borderRadius: 8, flexShrink: 0, marginTop: 1,
+                          background: injectContext ? 'rgba(139,92,246,0.7)' : '#2d3148',
+                          position: 'relative', transition: 'background 0.2s', cursor: 'pointer',
+                        }}
+                      >
+                        <div style={{
+                          position: 'absolute', top: 2, left: injectContext ? 16 : 2,
+                          width: 12, height: 12, borderRadius: '50%', background: 'white',
+                          transition: 'left 0.2s', boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
+                        }} />
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: '#c0caf5', lineHeight: 1.3 }}>Injecter le contexte partagé</div>
+                        <div style={{ fontSize: 10, color: '#565f89', marginTop: 2 }}>
+                          {contextCount > 0 ? `${contextCount} entrée${contextCount !== 1 ? 's' : ''} disponible${contextCount !== 1 ? 's' : ''}` : 'Contexte partagé vide'}
+                        </div>
+                      </div>
+                    </label>
+
+                    {/* Mode dangereux */}
+                    <label style={{ display: 'flex', alignItems: 'flex-start', gap: 9, cursor: 'pointer' }}>
+                      <div
+                        onClick={() => setDangerousMode((v) => !v)}
+                        style={{
+                          width: 30, height: 16, borderRadius: 8, flexShrink: 0, marginTop: 1,
+                          background: dangerousMode ? 'rgba(239,68,68,0.7)' : '#2d3148',
+                          position: 'relative', transition: 'background 0.2s', cursor: 'pointer',
+                        }}
+                      >
+                        <div style={{
+                          position: 'absolute', top: 2, left: dangerousMode ? 16 : 2,
+                          width: 12, height: 12, borderRadius: '50%', background: 'white',
+                          transition: 'left 0.2s', boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
+                        }} />
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: dangerousMode ? '#ef4444' : '#c0caf5', lineHeight: 1.3 }}>Mode dangereux</div>
+                        <div style={{ fontSize: 10, color: '#565f89', marginTop: 2 }}>Skip permissions — exécute sans confirmation</div>
+                      </div>
+                    </label>
+
+                  </div>
+                )}
+              </div>
+
+              {/* Bouton submit */}
+              <button
+                type="submit"
+                disabled={!available}
+                style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                  padding: '9px 14px', borderRadius: 8, border: 'none', cursor: available ? 'pointer' : 'not-allowed',
+                  background: available ? 'linear-gradient(135deg, #8b5cf6, #6d28d9)' : '#2d3148',
+                  color: available ? 'white' : '#565f89',
+                  fontSize: 13, fontWeight: 700,
+                  boxShadow: available ? '0 2px 12px rgba(139,92,246,0.35)' : 'none',
+                  transition: 'all 0.2s',
+                  opacity: available ? 1 : 0.6,
+                }}
+              >
+                <span style={{ fontSize: 14 }}>▶</span>
                 Lancer Claude Code
               </button>
+
             </form>
           </div>
 
