@@ -111,8 +111,17 @@ export default function GitDiffPanel({ directory, terminalId, onClose }) {
     setError(null);
     try {
       let res;
+      // Essayer via terminalId d'abord, fallback sur directory si 404
       if (terminalId) {
         res = await fetch(`/api/terminals/${terminalId}/diff`);
+        if (!res.ok && directory) {
+          // Terminal plus en mémoire (ex: après redémarrage backend) — utiliser le répertoire
+          res = await fetch('/api/git/diff', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ directory }),
+          });
+        }
       } else if (directory) {
         res = await fetch('/api/git/diff', {
           method: 'POST',
@@ -120,7 +129,7 @@ export default function GitDiffPanel({ directory, terminalId, onClose }) {
           body: JSON.stringify({ directory }),
         });
       } else {
-        setError('Aucun repertoire specifie');
+        setError('Aucun répertoire spécifié');
         setLoading(false);
         return;
       }
@@ -130,7 +139,6 @@ export default function GitDiffPanel({ directory, terminalId, onClose }) {
         setData(null);
       } else {
         setData(json);
-        // Selectionner le premier fichier par defaut
         if (json.files?.length > 0 && !selectedFile) {
           setSelectedFile(json.files[0].path);
         }
