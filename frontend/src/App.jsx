@@ -6,6 +6,7 @@ import Analytics from './pages/Analytics';
 import Terminals from './pages/Terminals';
 import SquadLauncher from './pages/SquadLauncher';
 import SquadView from './pages/SquadView';
+import Orchestrator from './pages/Orchestrator';
 import Sidebar from './components/Sidebar';
 
 export default function App() {
@@ -21,6 +22,7 @@ export default function App() {
           <Route path="/terminals" element={<Terminals />} />
           <Route path="/squads" element={<SquadLauncher />} />
           <Route path="/squads/:id" element={<SquadView />} />
+          <Route path="/orchestrator" element={<Orchestrator />} />
         </Routes>
       </main>
     </div>
