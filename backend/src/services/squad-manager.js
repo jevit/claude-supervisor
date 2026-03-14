@@ -3,11 +3,11 @@ const { randomUUID } = require('crypto');
 /**
  * SquadManager - Orchestrateur de squads (groupes de terminaux Claude Code).
  *
- * Un squad = une mission decomposee en sous-taches, chaque sous-tache
- * assignee a un terminal Claude Code independant.
+ * Chaque tâche peut déclarer des dépendances (dependsOn: ['Nom Agent A']).
+ * Les agents dépendants démarrent en status 'waiting' et ne sont spawnés
+ * que lorsque tous leurs prérequis sont en status completed ou exited.
  *
- * Option useWorktrees : chaque membre obtient son propre git worktree
- * (branche isolee), ce qui evite les conflits de fichiers entre agents.
+ * Option useWorktrees : chaque membre obtient son propre git worktree.
  */
 class SquadManager {
   constructor(terminalManager, sharedContext, messageBus, broadcast, store, worktreeManager = null) {
@@ -19,38 +19,37 @@ class SquadManager {
     this.worktreeManager  = worktreeManager;
     this.squads           = new Map();
 
-    // Restaurer depuis le store
     const saved = store.get('squads');
     if (saved && Array.isArray(saved)) {
-      for (const s of saved) {
-        this.squads.set(s.id, s);
-      }
+      for (const s of saved) this.squads.set(s.id, s);
       console.log(`SquadManager: ${this.squads.size} squad(s) restaure(s)`);
     }
 
-    // Verifier l'etat des squads toutes les 10s
-    this._syncTimer = setInterval(() => this._syncAll(), 10000);
+    this._syncTimer = setInterval(() => this._syncAll(), 5000);
   }
 
   _persist() {
-    this.store.set('squads', [...this.squads.values()]);
+    // Ne pas persister _spawnConfig (contient des closures potentielles)
+    const serializable = [...this.squads.values()].map((squad) => ({
+      ...squad,
+      members: squad.members.map(({ _spawnConfig, ...m }) => m),
+    }));
+    this.store.set('squads', serializable);
   }
 
   /**
-   * Creer un nouveau squad et lancer les terminaux.
+   * Créer un nouveau squad.
    * @param {object} opts
    * @param {string}  opts.name
    * @param {string}  opts.goal
-   * @param {string}  [opts.directory]       - Repertoire de base (worktree source)
-   * @param {Array}   opts.tasks             - [{name, task}]
+   * @param {string}  [opts.directory]
+   * @param {Array}   opts.tasks           - [{name, task, dependsOn?: string[]}]
    * @param {string}  [opts.model]
-   * @param {boolean} [opts.autoCoordinate]  - Partager l'objectif dans SharedContext
-   * @param {boolean} [opts.useWorktrees]    - Creer un git worktree par membre
+   * @param {boolean} [opts.autoCoordinate]
+   * @param {boolean} [opts.useWorktrees]
    */
   createSquad({ name, goal, directory, tasks, model, autoCoordinate = true, useWorktrees = false }) {
-    if (!name || !goal || !tasks || !Array.isArray(tasks) || tasks.length === 0) {
-      return null;
-    }
+    if (!name || !goal || !tasks || !Array.isArray(tasks) || tasks.length === 0) return null;
 
     const squadId = randomUUID();
     const useWt   = useWorktrees && !!this.worktreeManager && this.worktreeManager.isGitRepo();
@@ -69,96 +68,127 @@ class SquadManager {
       completedAt: null,
     };
 
-    // Lancer un terminal par tache
+    // Construire la liste des membres avec leur config de spawn
     for (const task of tasks) {
       const memberName = task.name || `Agent ${squad.members.length + 1}`;
-      const safeName   = memberName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
-      const branchName = `squad/${squadId.substring(0, 8)}/${safeName}`;
+      const dependsOn  = Array.isArray(task.dependsOn) ? task.dependsOn.filter(Boolean) : [];
 
-      // Determiner le repertoire de travail
-      let workDir   = directory || undefined;
+      // Worktree optionnel
       let worktreePath = null;
-
+      let workDir      = directory || undefined;
       if (useWt) {
         try {
+          const safeName   = memberName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+          const branchName = `squad/${squadId.substring(0, 8)}/${safeName}`;
           const folderName = `${squadId.substring(0, 8)}-${safeName}`;
           worktreePath = this.worktreeManager.create(branchName, folderName);
           workDir = worktreePath;
-          console.log(`WorktreeManager: cree ${worktreePath} pour ${memberName}`);
         } catch (err) {
-          console.warn(`WorktreeManager: echec creation worktree pour ${memberName}: ${err.message}`);
-          worktreePath = null;
-          workDir = directory || undefined;
+          console.warn(`WorktreeManager: echec pour ${memberName}: ${err.message}`);
         }
       }
 
       const prompt = this._buildPrompt(squad, memberName, task.task, tasks, useWt);
+      const spawnConfig = { directory: workDir, name: `[Squad] ${memberName}`, prompt, model: model || undefined };
 
-      try {
-        const result = this.terminalManager.spawn({
-          directory: workDir,
-          name: `[Squad] ${memberName}`,
-          prompt,
-          model: model || undefined,
-        });
+      // Vérifier si les dépendances sont déjà satisfaites (cas : dépendances sur un agent qui n'existe pas)
+      const validDeps = dependsOn.filter((dep) => tasks.some((t) => t.name === dep));
 
-        squad.members.push({
-          id: result.terminalId,
-          name: memberName,
-          task: task.task,
-          branch: useWt ? branchName : null,
-          worktreePath,
-          status: 'running',
-          progress: 0,
-          startedAt: new Date().toISOString(),
-          completedAt: null,
-        });
-      } catch (err) {
-        // Nettoyer le worktree si le terminal n'a pas pu demarrer
-        if (worktreePath) {
-          try { this.worktreeManager.remove(worktreePath, branchName); } catch {}
+      const member = {
+        id: null,
+        name: memberName,
+        task: task.task,
+        dependsOn: validDeps,
+        branch: useWt ? `squad/${squadId.substring(0, 8)}/${memberName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '')}` : null,
+        worktreePath,
+        status: validDeps.length > 0 ? 'waiting' : 'running',
+        progress: 0,
+        startedAt: validDeps.length > 0 ? null : new Date().toISOString(),
+        completedAt: null,
+        _spawnConfig: spawnConfig,
+      };
+
+      if (validDeps.length === 0) {
+        // Spawner immédiatement
+        try {
+          const result = this.terminalManager.spawn(spawnConfig);
+          member.id = result.terminalId;
+          delete member._spawnConfig;
+        } catch (err) {
+          member.status = 'error';
+          member.error = err.message;
+          delete member._spawnConfig;
         }
-        squad.members.push({
-          id: null,
-          name: memberName,
-          task: task.task,
-          branch: null,
-          worktreePath: null,
-          status: 'error',
-          progress: 0,
-          error: err.message,
-          startedAt: new Date().toISOString(),
-          completedAt: null,
-        });
       }
+
+      squad.members.push(member);
     }
 
-    // Partager le contexte du squad
     if (autoCoordinate && this.sharedContext) {
       this.sharedContext.add(`squad:${squadId}:goal`, goal, 'squad-manager');
       this.sharedContext.add(
         `squad:${squadId}:members`,
-        JSON.stringify(squad.members.map((m) => ({ name: m.name, task: m.task, branch: m.branch }))),
+        JSON.stringify(squad.members.map((m) => ({
+          name: m.name,
+          task: m.task,
+          dependsOn: m.dependsOn,
+          branch: m.branch,
+        }))),
         'squad-manager'
       );
-      if (useWt) {
-        this.sharedContext.add(
-          `squad:${squadId}:worktrees`,
-          'Chaque agent travaille sur sa propre branche git isolee. Merges manuels a la fin.',
-          'squad-manager'
-        );
-      }
     }
 
     this.squads.set(squadId, squad);
     this._persist();
-    this.broadcast('squad:created', {
-      id: squadId, name, goal,
-      memberCount: squad.members.length,
-      useWorktrees: useWt,
-    });
-
+    this.broadcast('squad:created', { id: squadId, name, goal, memberCount: squad.members.length, useWorktrees: useWt });
     return squad;
+  }
+
+  /**
+   * Spawner un membre en attente dont les dépendances sont désormais satisfaites.
+   */
+  _spawnWaitingMember(squad, member) {
+    const cfg = member._spawnConfig;
+    if (!cfg) return;
+    try {
+      const result = this.terminalManager.spawn(cfg);
+      member.id = result.terminalId;
+      member.status = 'running';
+      member.startedAt = new Date().toISOString();
+      delete member._spawnConfig;
+      this.broadcast('squad:member-started', {
+        squadId: squad.id,
+        squadName: squad.name,
+        memberName: member.name,
+        terminalId: result.terminalId,
+      });
+    } catch (err) {
+      member.status = 'error';
+      member.error = err.message;
+      delete member._spawnConfig;
+    }
+  }
+
+  /**
+   * Vérifier si des membres en attente peuvent démarrer.
+   */
+  _checkAndSpawnWaiting(squad) {
+    const completedNames = new Set(
+      squad.members
+        .filter((m) => m.status === 'completed' || m.status === 'exited')
+        .map((m) => m.name)
+    );
+
+    let anySpawned = false;
+    for (const member of squad.members) {
+      if (member.status !== 'waiting') continue;
+      const allMet = member.dependsOn.every((dep) => completedNames.has(dep));
+      if (allMet) {
+        this._spawnWaitingMember(squad, member);
+        anySpawned = true;
+      }
+    }
+    return anySpawned;
   }
 
   /**
@@ -171,7 +201,7 @@ class SquadManager {
       .join('\n');
 
     const worktreeNote = useWorktrees
-      ? `\nBRANCHE GIT: Tu travailles sur une branche isolee. Commits libres, pas de risque de conflit avec les autres agents.`
+      ? `\nBRANCHE GIT: Tu travailles sur une branche isolée. Commits libres.`
       : '';
 
     return `Tu es l'agent "${memberName}" dans un squad de ${allTasks.length} agents.
@@ -180,16 +210,16 @@ MISSION GLOBALE: ${squad.goal}
 
 TA TACHE SPECIFIQUE: ${task}
 
-Repertoire de travail: ${squad.directory}${worktreeNote}
+Répertoire de travail: ${squad.directory}${worktreeNote}
 
 AUTRES AGENTS DU SQUAD:
 ${otherTasks || '(aucun)'}
 
 REGLES DE COORDINATION:
-- Concentre-toi UNIQUEMENT sur ta tache assignee
-- Ne modifie PAS les fichiers en dehors du scope de ta tache
-- Quand tu as termine, dis clairement "TASK COMPLETE"
-- Si tu decouvres quelque chose d'important pour les autres, mentionne-le clairement`;
+- Concentre-toi UNIQUEMENT sur ta tâche assignée
+- Ne modifie PAS les fichiers en dehors du scope de ta tâche
+- Quand tu as terminé, dis clairement "TASK COMPLETE"
+- Si tu découvres quelque chose d'important pour les autres, mentionne-le clairement`;
   }
 
   getSquad(squadId) {
@@ -201,15 +231,10 @@ REGLES DE COORDINATION:
 
   getAllSquads() {
     const all = [...this.squads.values()];
-    for (const squad of all) {
-      this._syncMemberStatuses(squad);
-    }
+    for (const squad of all) this._syncMemberStatuses(squad);
     return all.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   }
 
-  /**
-   * Annuler un squad (tuer tous les terminaux + nettoyer les worktrees).
-   */
   cancelSquad(squadId) {
     const squad = this.squads.get(squadId);
     if (!squad) return null;
@@ -220,7 +245,10 @@ REGLES DE COORDINATION:
         member.status = 'cancelled';
         member.completedAt = new Date().toISOString();
       }
-      // Nettoyer le worktree si present
+      if (member.status === 'waiting') {
+        member.status = 'cancelled';
+        delete member._spawnConfig;
+      }
       if (member.worktreePath && this.worktreeManager) {
         try { this.worktreeManager.remove(member.worktreePath, member.branch); } catch {}
         member.worktreePath = null;
@@ -234,9 +262,6 @@ REGLES DE COORDINATION:
     return squad;
   }
 
-  /**
-   * Envoyer un message a tous les membres du squad.
-   */
   broadcastToSquad(squadId, message) {
     const squad = this.squads.get(squadId);
     if (!squad) return 0;
@@ -249,9 +274,6 @@ REGLES DE COORDINATION:
     return sent;
   }
 
-  /**
-   * Mettre a jour la progression d'un membre.
-   */
   updateMemberProgress(squadId, memberId, progress) {
     const squad = this.squads.get(squadId);
     if (!squad) return null;
@@ -267,36 +289,45 @@ REGLES DE COORDINATION:
     return member;
   }
 
-  /**
-   * Synchroniser les statuts des membres avec le TerminalManager.
-   */
   _syncMemberStatuses(squad) {
     if (squad.status === 'cancelled') return;
 
     let changed = false;
+
     for (const member of squad.members) {
       if (!member.id || member.status !== 'running') continue;
+
       const term = this.terminalManager.getTerminal(member.id);
       if (!term || term.status !== 'running') {
-        member.status = 'exited';
+        // Terminal terminé → vérifier si "TASK COMPLETE" dans la sortie
+        const buffer = this.terminalManager.getOutput(member.id, 3000) || '';
+        const clean  = buffer.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
+        const taskComplete = /^(TASK|MISSION) COMPLETE/im.test(clean);
+        member.status     = taskComplete ? 'completed' : 'exited';
+        member.progress   = 100;
         member.completedAt = new Date().toISOString();
-        member.progress = 100;
         changed = true;
       }
     }
 
-    const running = squad.members.filter((m) => m.status === 'running');
-    if (running.length === 0 && squad.status === 'running') {
-      const completed = squad.members.filter((m) => m.status === 'completed' || m.status === 'exited');
-      squad.status = completed.length === squad.members.length ? 'completed' : 'partial';
+    // Débloquer les agents en attente dont les dépendances sont satisfaites
+    if (changed || squad.members.some((m) => m.status === 'waiting')) {
+      const anySpawned = this._checkAndSpawnWaiting(squad);
+      if (anySpawned) changed = true;
+    }
+
+    // Vérifier si le squad est entièrement terminé
+    const waiting = squad.members.filter((m) => m.status === 'waiting').length;
+    const running = squad.members.filter((m) => m.status === 'running').length;
+
+    if (waiting === 0 && running === 0 && squad.status === 'running') {
+      const completed = squad.members.filter((m) => m.status === 'completed' || m.status === 'exited').length;
+      squad.status = completed === squad.members.length ? 'completed' : 'partial';
       squad.completedAt = new Date().toISOString();
       changed = true;
       this.broadcast('squad:completed', {
-        id: squad.id,
-        name: squad.name,
-        completedCount: completed.length,
-        totalCount: squad.members.length,
-        useWorktrees: squad.useWorktrees,
+        id: squad.id, name: squad.name,
+        completedCount: completed, totalCount: squad.members.length,
       });
     }
 
@@ -319,6 +350,7 @@ REGLES DE COORDINATION:
         id: m.id,
         name: m.name,
         task: m.task,
+        dependsOn: m.dependsOn,
         branch: m.branch,
         worktreePath: m.worktreePath,
         status: m.status,
@@ -327,13 +359,9 @@ REGLES DE COORDINATION:
     };
   }
 
-  /**
-   * Supprimer un squad termine de l'historique + nettoyer les worktrees.
-   */
   removeSquad(squadId) {
     const squad = this.squads.get(squadId);
     if (!squad) return false;
-
     for (const member of squad.members) {
       if (member.id && member.status === 'running') {
         try { this.terminalManager.kill(member.id); } catch {}
@@ -342,17 +370,13 @@ REGLES DE COORDINATION:
         try { this.worktreeManager.remove(member.worktreePath, member.branch); } catch {}
       }
     }
-
     this.squads.delete(squadId);
     this._persist();
     return true;
   }
 
   destroy() {
-    if (this._syncTimer) {
-      clearInterval(this._syncTimer);
-      this._syncTimer = null;
-    }
+    if (this._syncTimer) { clearInterval(this._syncTimer); this._syncTimer = null; }
   }
 }
 

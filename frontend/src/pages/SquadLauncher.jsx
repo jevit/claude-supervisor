@@ -8,15 +8,15 @@ function SquadForm({ onCreated }) {
   const [directory, setDirectory] = useState('');
   const [model, setModel] = useState('');
   const [tasks, setTasks] = useState([
-    { name: 'Agent 1', task: '' },
-    { name: 'Agent 2', task: '' },
+    { name: 'Agent 1', task: '', dependsOn: [] },
+    { name: 'Agent 2', task: '', dependsOn: [] },
   ]);
   const [useWorktrees, setUseWorktrees] = useState(false);
   const [launching, setLaunching] = useState(false);
   const [error, setError] = useState('');
 
   function addTask() {
-    setTasks([...tasks, { name: `Agent ${tasks.length + 1}`, task: '' }]);
+    setTasks([...tasks, { name: `Agent ${tasks.length + 1}`, task: '', dependsOn: [] }]);
   }
 
   function removeTask(idx) {
@@ -43,7 +43,11 @@ function SquadForm({ onCreated }) {
           goal: goal.trim(),
           directory: directory.trim() || undefined,
           model: model || undefined,
-          tasks: tasks.filter((t) => t.task.trim()),
+          tasks: tasks.filter((t) => t.task.trim()).map((t) => ({
+            name: t.name,
+            task: t.task,
+            dependsOn: t.dependsOn || [],
+          })),
           useWorktrees,
         }),
       });
@@ -100,16 +104,46 @@ function SquadForm({ onCreated }) {
           <button type="button" className="squad-add-btn" onClick={addTask}>+ Ajouter</button>
         </div>
         <div className="squad-tasks-list">
-          {tasks.map((t, i) => (
-            <div key={i} className="squad-task-row">
-              <input className="squad-input squad-task-name" placeholder={`Agent ${i + 1}`}
-                value={t.name} onChange={(e) => updateTask(i, 'name', e.target.value)} />
-              <input className="squad-input" style={{ flex: 1 }} placeholder="Description de la tache..."
-                value={t.task} onChange={(e) => updateTask(i, 'task', e.target.value)} />
-              <button type="button" className="squad-remove-btn" onClick={() => removeTask(i)}
-                disabled={tasks.length <= 1}>✕</button>
-            </div>
-          ))}
+          {tasks.map((t, i) => {
+            // Agents disponibles comme dépendances (tous sauf soi-même)
+            const available = tasks.filter((_, j) => j !== i && tasks[j].name.trim());
+            const toggleDep = (depName) => {
+              const deps = t.dependsOn || [];
+              updateTask(i, 'dependsOn', deps.includes(depName)
+                ? deps.filter((d) => d !== depName)
+                : [...deps, depName]
+              );
+            };
+            return (
+              <div key={i} className="squad-task-block">
+                <div className="squad-task-row">
+                  <input className="squad-input squad-task-name" placeholder={`Agent ${i + 1}`}
+                    value={t.name} onChange={(e) => updateTask(i, 'name', e.target.value)} />
+                  <input className="squad-input" style={{ flex: 1 }} placeholder="Description de la tâche..."
+                    value={t.task} onChange={(e) => updateTask(i, 'task', e.target.value)} />
+                  <button type="button" className="squad-remove-btn" onClick={() => removeTask(i)}
+                    disabled={tasks.length <= 1}>✕</button>
+                </div>
+                {available.length > 0 && (
+                  <div className="squad-deps-row">
+                    <span className="squad-deps-label">Attend :</span>
+                    {available.map((a) => {
+                      const active = (t.dependsOn || []).includes(a.name);
+                      return (
+                        <button key={a.name} type="button"
+                          className={`squad-dep-chip ${active ? 'active' : ''}`}
+                          onClick={() => toggleDep(a.name)}
+                          title={active ? `Retirer dépendance sur ${a.name}` : `Attendre que ${a.name} termine`}
+                        >
+                          {active ? '⏱ ' : ''}{a.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
         {error && <div className="squad-error">{error}</div>}
         <button type="submit" className="squad-launch-btn" disabled={launching}>
@@ -207,9 +241,15 @@ export default function SquadLauncher() {
         .squad-tasks-header { display: flex; justify-content: space-between; align-items: center; }
         .squad-add-btn { background: none; border: 1px solid var(--border); border-radius: 6px; padding: 4px 12px; font-size: 13px; cursor: pointer; color: var(--accent); }
         .squad-add-btn:hover { background: rgba(139,92,246,0.1); }
-        .squad-tasks-list { display: flex; flex-direction: column; gap: 8px; }
+        .squad-tasks-list { display: flex; flex-direction: column; gap: 10px; }
+        .squad-task-block { display: flex; flex-direction: column; gap: 5px; }
         .squad-task-row { display: flex; gap: 8px; align-items: center; }
         .squad-task-name { max-width: 140px; flex: 0 0 140px; }
+        .squad-deps-row { display: flex; align-items: center; gap: 6px; padding-left: 4px; flex-wrap: wrap; }
+        .squad-deps-label { font-size: 11px; color: var(--text-secondary); font-weight: 600; white-space: nowrap; }
+        .squad-dep-chip { background: var(--bg-primary); border: 1px solid var(--border); border-radius: 12px; padding: 2px 10px; font-size: 11px; cursor: pointer; color: var(--text-secondary); transition: all 0.15s; }
+        .squad-dep-chip:hover { border-color: var(--accent); color: var(--accent); }
+        .squad-dep-chip.active { background: rgba(139,92,246,0.15); border-color: var(--accent); color: var(--accent); font-weight: 600; }
         .squad-remove-btn { background: none; border: none; color: var(--error, #ef4444); cursor: pointer; font-size: 16px; padding: 4px 8px; }
         .squad-remove-btn:disabled { opacity: 0.3; cursor: not-allowed; }
         .squad-wt-label { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; font-weight: 600; color: var(--text-primary); }

@@ -3,19 +3,21 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useWebSocket } from '../services/websocket';
 
 const STATUS_COLORS = {
-  running: 'var(--accent)',
+  running:   'var(--accent)',
   completed: 'var(--success, #10b981)',
-  exited: 'var(--success, #10b981)',
-  error: 'var(--error, #ef4444)',
+  exited:    'var(--success, #10b981)',
+  waiting:   '#64748b',
+  error:     'var(--error, #ef4444)',
   cancelled: 'var(--warning, #f59e0b)',
 };
 
 const STATUS_LABELS = {
-  running: 'En cours',
-  completed: 'Termine',
-  exited: 'Sorti',
-  error: 'Erreur',
-  cancelled: 'Annule',
+  running:   'En cours',
+  completed: 'Terminé',
+  exited:    'Sorti',
+  waiting:   'En attente',
+  error:     'Erreur',
+  cancelled: 'Annulé',
 };
 
 function MemberPanel({ member }) {
@@ -58,9 +60,25 @@ function MemberPanel({ member }) {
         </div>
       </div>
       <p className="member-task">{member.task}</p>
-      <div className="member-terminal" onClick={() => setExpanded(!expanded)}
-        style={{ maxHeight: expanded ? 600 : 200 }}>
-        <pre className="member-output">{output || 'En attente de sortie...'}</pre>
+
+      {/* Dépendances en attente */}
+      {member.status === 'waiting' && member.dependsOn?.length > 0 && (
+        <div className="member-waiting-info">
+          <span className="member-waiting-icon">⏱</span>
+          <span>En attente de : </span>
+          {member.dependsOn.map((dep) => (
+            <span key={dep} className="member-dep-tag">{dep}</span>
+          ))}
+        </div>
+      )}
+
+      <div className="member-terminal" onClick={() => member.status !== 'waiting' && setExpanded(!expanded)}
+        style={{ maxHeight: expanded ? 600 : 200, opacity: member.status === 'waiting' ? 0.4 : 1 }}>
+        <pre className="member-output">
+          {member.status === 'waiting'
+            ? `En attente de : ${member.dependsOn?.join(', ')}…`
+            : (output || 'En attente de sortie...')}
+        </pre>
       </div>
       {member.id && (
         <div className="member-footer">
@@ -140,8 +158,9 @@ export default function SquadView() {
   }
 
   const running = squad.members.filter((m) => m.status === 'running').length;
-  const done = squad.members.filter((m) => m.status === 'completed' || m.status === 'exited').length;
-  const total = squad.members.length;
+  const waiting = squad.members.filter((m) => m.status === 'waiting').length;
+  const done    = squad.members.filter((m) => m.status === 'completed' || m.status === 'exited').length;
+  const total   = squad.members.length;
   const avgProgress = total > 0
     ? Math.round(squad.members.reduce((s, m) => s + (m.progress || 0), 0) / total)
     : 0;
@@ -166,7 +185,10 @@ export default function SquadView() {
             <div className="squad-global-bar">
               <div className="squad-global-fill" style={{ width: `${avgProgress}%` }} />
             </div>
-            <span>{avgProgress}% — {done}/{total} termine(s), {running} en cours</span>
+            <span>
+              {avgProgress}% — {done}/{total} terminé(s), {running} en cours
+              {waiting > 0 && <span style={{ color: '#64748b', marginLeft: 8 }}>⏱ {waiting} en attente</span>}
+            </span>
           </div>
           {squad.status === 'running' && (
             <form className="squad-broadcast-form" onSubmit={handleBroadcast}>
@@ -212,6 +234,10 @@ export default function SquadView() {
         .member-panel.member-completed, .member-panel.member-exited { border-left: 3px solid var(--success, #10b981); }
         .member-panel.member-error { border-left: 3px solid var(--error, #ef4444); }
         .member-panel.member-cancelled { border-left: 3px solid var(--warning, #f59e0b); }
+        .member-panel.member-waiting { border-left: 3px solid #64748b; opacity: 0.85; }
+        .member-waiting-info { display: flex; align-items: center; gap: 6px; padding: 6px 14px; font-size: 12px; color: #64748b; flex-wrap: wrap; }
+        .member-waiting-icon { font-size: 14px; }
+        .member-dep-tag { background: rgba(100,116,139,0.15); border: 1px solid #64748b; border-radius: 4px; padding: 1px 7px; font-size: 11px; font-weight: 600; }
         .member-header { padding: 12px 14px 8px; }
         .member-info { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
         .member-name { font-weight: 600; font-size: 14px; }
