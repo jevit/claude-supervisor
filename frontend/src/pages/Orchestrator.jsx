@@ -15,73 +15,102 @@ function Kpi({ value, label, color = '#8b5cf6', onClick }) {
 
 /* ── Résumé git d'un répertoire ──────────────────────────────────── */
 function GitSummary({ directory }) {
-  const [git, setGit]       = useState(null);
+  const [git, setGit]     = useState(null);
   const [loading, setLoading] = useState(true);
-  const [open, setOpen]     = useState(false);
+  const [open, setOpen]   = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
-  useEffect(() => {
+  const fetchGit = useCallback(() => {
     if (!directory) { setLoading(false); return; }
+    setRefreshing(true);
     fetch('/api/git/diff', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ directory }),
     })
       .then((r) => r.json())
-      .then((d) => { setGit(d); setLoading(false); })
-      .catch(() => setLoading(false));
+      .then((d) => { setGit(d); setLoading(false); setRefreshing(false); })
+      .catch(() => { setLoading(false); setRefreshing(false); });
   }, [directory]);
 
-  if (loading) return <span className="orc-git-muted">git…</span>;
+  useEffect(() => {
+    fetchGit();
+    // Rafraîchissement toutes les 30s
+    const t = setInterval(fetchGit, 30000);
+    return () => clearInterval(t);
+  }, [fetchGit]);
+
+  if (loading) return <div className="orc-git-bar"><span className="orc-git-muted">git…</span></div>;
   if (!git || git.error) return null;
 
   const { modified = 0, added = 0, deleted = 0, untracked = 0 } = git.summary || {};
-  const hasChanges = git.files?.length > 0;
-  const hasCommits = git.recentCommits?.length > 0;
-  if (!hasChanges && !hasCommits) return <span className="orc-git-muted">Aucun historique git</span>;
+  const hasChanges = (git.files?.length || 0) > 0;
+  const hasCommits = (git.recentCommits?.length || 0) > 0;
 
   return (
-    <div style={{ width: '100%' }}>
-      {/* Résumé + toggle */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+    <div className="orc-git-root">
+      {/* ── Barre de résumé toujours visible ── */}
+      <div className="orc-git-bar">
+        <span className="orc-git-icon">⎇</span>
         {hasChanges ? (
           <span className="orc-git-badge">
-            {git.files.length} fichier{git.files.length > 1 ? 's' : ''} modifié{git.files.length > 1 ? 's' : ''}
+            <span style={{ color: '#f59e0b' }}>{git.files.length} modif{git.files.length > 1 ? 's' : ''}</span>
             {modified > 0  && <span style={{ color: '#f59e0b' }}> ~{modified}</span>}
             {added > 0     && <span style={{ color: '#10b981' }}> +{added}</span>}
             {deleted > 0   && <span style={{ color: '#ef4444' }}> -{deleted}</span>}
             {untracked > 0 && <span style={{ color: '#64748b' }}> ?{untracked}</span>}
           </span>
         ) : (
-          <span className="orc-git-muted" style={{ fontSize: 11 }}>Working tree propre</span>
+          <span className="orc-git-clean">✓ tree propre</span>
         )}
-        <button className="orc-git-toggle" onClick={() => setOpen((v) => !v)}>
-          {open ? '▲ masquer' : '▼ voir historique'}
-        </button>
+        {hasCommits && (
+          <span className="orc-git-muted" style={{ fontSize: 10 }}>
+            · {git.recentCommits[0].message.slice(0, 40)}{git.recentCommits[0].message.length > 40 ? '…' : ''}
+          </span>
+        )}
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+          <button
+            className="orc-git-btn"
+            onClick={() => fetchGit()}
+            title="Rafraîchir"
+            disabled={refreshing}
+          >
+            {refreshing ? '⟳' : '↺'}
+          </button>
+          <button
+            className={`orc-git-btn ${open ? 'orc-git-btn-active' : ''}`}
+            onClick={() => setOpen((v) => !v)}
+          >
+            {open ? '▲ Fermer' : '▼ Détails'}
+          </button>
+        </div>
       </div>
 
-      {/* Détail dépliable */}
-      {open && (
-        <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {/* ── Panneau dépliable — max-height pour garantir la visibilité ── */}
+      <div className="orc-git-panel" style={{ maxHeight: open ? 600 : 0 }}>
+        <div className="orc-git-panel-inner">
           {/* Fichiers modifiés */}
-          {hasChanges && git.files.map((f, i) => (
-            <FileHunk key={i} file={f} />
-          ))}
+          {hasChanges && (
+            <div className="orc-git-section">
+              <div className="orc-git-section-title">Fichiers modifiés</div>
+              {git.files.map((f, i) => <FileHunk key={i} file={f} />)}
+            </div>
+          )}
+
           {/* Derniers commits */}
           {hasCommits && (
-            <div style={{ marginTop: hasChanges ? 8 : 0 }}>
-              <div style={{ fontSize: 10, color: '#565f89', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                Derniers commits
-              </div>
+            <div className="orc-git-section">
+              <div className="orc-git-section-title">Historique récent</div>
               {git.recentCommits.map((c) => (
-                <div key={c.hash} style={{ display: 'flex', gap: 8, padding: '3px 0', borderBottom: '1px solid #2a2b3d', alignItems: 'baseline' }}>
-                  <code style={{ fontSize: 10, color: '#8b5cf6', flexShrink: 0 }}>{c.hash}</code>
-                  <span style={{ fontSize: 11, color: '#c0caf5' }}>{c.message}</span>
+                <div key={c.hash} className="orc-git-commit">
+                  <code className="orc-git-hash">{c.hash}</code>
+                  <span className="orc-git-msg">{c.message}</span>
                 </div>
               ))}
             </div>
           )}
         </div>
-      )}
+      </div>
     </div>
   );
 }
@@ -465,7 +494,7 @@ export default function Orchestrator() {
 
         /* Squad */
         .orc-squads-list { display: flex; flex-direction: column; gap: 16px; }
-        .orc-squad { background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+        .orc-squad { background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; }
         .orc-squad-header { padding: 14px 16px 10px; border-bottom: 1px solid var(--border); }
         .orc-squad-title-row { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
         .orc-squad-name { background: none; border: none; font-size: 16px; font-weight: 700; color: var(--text-primary); cursor: pointer; padding: 0; }
@@ -504,19 +533,28 @@ export default function Orchestrator() {
         .orc-nav-btn { background: none; border: 1px solid var(--border); border-radius: 4px; padding: 2px 8px; font-size: 11px; cursor: pointer; color: var(--text-secondary); }
         .orc-nav-btn:hover { border-color: var(--accent); color: var(--accent); }
 
-        /* Git */
-        .orc-git-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        /* Git — panneau complet */
+        .orc-git-root { width: 100%; }
+        .orc-git-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-height: 28px; }
+        .orc-git-icon { font-size: 13px; color: #8b5cf6; flex-shrink: 0; }
         .orc-git-badge { font-size: 12px; font-weight: 600; }
-        .orc-git-toggle { background: none; border: none; font-size: 11px; color: var(--accent); cursor: pointer; padding: 0; }
-        .orc-git-files { width: 100%; display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
-        .orc-git-file { display: flex; align-items: center; gap: 6px; font-size: 11px; }
-        .orc-git-status { font-weight: 700; width: 16px; text-align: center; }
-        .orc-git-modified { color: #f59e0b; }
-        .orc-git-added    { color: #10b981; }
-        .orc-git-deleted  { color: #ef4444; }
-        .orc-git-untracked{ color: #64748b; }
-        .orc-git-path { font-family: monospace; color: var(--text-secondary); }
+        .orc-git-clean { font-size: 11px; color: #10b981; font-weight: 600; }
         .orc-git-muted { font-size: 11px; color: var(--text-secondary); }
+        .orc-git-btn {
+          background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 5px;
+          padding: 3px 10px; font-size: 11px; cursor: pointer; color: var(--text-secondary);
+          transition: all 0.15s; white-space: nowrap;
+        }
+        .orc-git-btn:hover { border-color: var(--accent); color: var(--accent); }
+        .orc-git-btn-active { background: rgba(139,92,246,0.15); border-color: var(--accent); color: var(--accent); }
+        .orc-git-btn:disabled { opacity: 0.5; cursor: default; }
+        .orc-git-panel { overflow: hidden; transition: max-height 0.3s ease; }
+        .orc-git-panel-inner { padding: 10px 0 4px; display: flex; flex-direction: column; gap: 12px; }
+        .orc-git-section { display: flex; flex-direction: column; gap: 4px; }
+        .orc-git-section-title { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #565f89; margin-bottom: 4px; }
+        .orc-git-commit { display: flex; gap: 8px; padding: 4px 0; border-bottom: 1px solid #2a2b3d; align-items: baseline; }
+        .orc-git-hash { font-size: 10px; color: #8b5cf6; flex-shrink: 0; font-family: monospace; }
+        .orc-git-msg { font-size: 11px; color: #c0caf5; }
 
         /* Conflits */
         .orc-conflicts-list { display: flex; flex-direction: column; gap: 8px; }
