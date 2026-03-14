@@ -1,43 +1,61 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useWebSocket } from '../services/websocket';
+import {
+  ResponsiveContainer,
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Cell,
+  PieChart, Pie, Legend,
+} from 'recharts';
 
-/**
- * Barre horizontale proportionnelle (CSS, pas ASCII).
- */
-function BarChart({ data, maxWidth = 200, color = 'var(--accent)' }) {
-  const max = Math.max(...data.map((d) => d.value), 1);
+/* ── Palette Tokyonight ──────────────────────────────────────────── */
+const C = {
+  accent:  '#8b5cf6',
+  success: '#10b981',
+  warning: '#f59e0b',
+  error:   '#ef4444',
+  info:    '#3b82f6',
+  muted:   '#64748b',
+  border:  '#2a2b3d',
+  text:    '#a9b1d6',
+  bg:      '#1a1b26',
+};
+
+const SQUAD_STATUS_COLORS = {
+  running:   C.accent,
+  completed: C.success,
+  cancelled: C.error,
+  partial:   C.warning,
+};
+
+/* ── Tooltip personnalisé ────────────────────────────────────────── */
+function CustomTooltip({ active, payload, label, unit = '' }) {
+  if (!active || !payload?.length) return null;
   return (
-    <div className="bar-chart">
-      {data.map((d, i) => (
-        <div key={i} className="bar-row">
-          <span className="bar-label">{d.label}</span>
-          <div
-            className="bar-fill"
-            style={{ width: Math.max(2, (d.value / max) * maxWidth), background: color }}
-          />
-          <span className="bar-value">{d.value}</span>
+    <div style={{
+      background: '#1f2335', border: `1px solid ${C.border}`, borderRadius: 6,
+      padding: '6px 10px', fontSize: 12, color: C.text,
+    }}>
+      <div style={{ fontWeight: 700, marginBottom: 2 }}>{label}</div>
+      {payload.map((p, i) => (
+        <div key={i} style={{ color: p.color || C.accent }}>
+          {p.name ? `${p.name} : ` : ''}{p.value}{unit}
         </div>
       ))}
     </div>
   );
 }
 
-/**
- * Carte KPI principale.
- */
-function KpiCard({ value, label, color = 'accent', sub }) {
+/* ── Carte KPI ───────────────────────────────────────────────────── */
+function KpiCard({ value, label, color = C.accent, sub }) {
   return (
     <div className="card metric-card">
-      <div className={`metric-value ${color}`}>{value}</div>
+      <div className="metric-value" style={{ color }}>{value}</div>
       <div className="metric-label">{label}</div>
       {sub && <div className="metric-sub">{sub}</div>}
     </div>
   );
 }
 
-/**
- * Formater une durée en minutes : « 2h 14m » ou « 47m » ou « < 1m ».
- */
+/* ── Utilitaire durée ────────────────────────────────────────────── */
 function fmtDuration(minutes) {
   if (!minutes || minutes < 1) return '< 1m';
   const h = Math.floor(minutes / 60);
@@ -45,6 +63,21 @@ function fmtDuration(minutes) {
   return h > 0 ? `${h}h ${m}m` : `${m}m`;
 }
 
+/* ── Wrapper chart (titre + conteneur) ──────────────────────────── */
+function ChartCard({ title, children, empty }) {
+  return (
+    <div className="card chart-container">
+      <h3 className="chart-title">{title}</h3>
+      {empty
+        ? <p className="empty-message">{empty}</p>
+        : children}
+    </div>
+  );
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   Page principale
+   ════════════════════════════════════════════════════════════════════ */
 export default function Analytics() {
   const [sessions,     setSessions]     = useState([]);
   const [timeline,     setTimeline]     = useState([]);
@@ -72,232 +105,290 @@ export default function Analytics() {
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
-  // Rafraîchir sur events WS pertinents
   useWebSocket(useCallback((event) => {
-    if (
-      event.startsWith('session:') ||
-      event.startsWith('squad:')   ||
-      event.startsWith('terminal:')
-    ) fetchAll();
+    if (event.startsWith('session:') || event.startsWith('squad:') || event.startsWith('terminal:'))
+      fetchAll();
   }, [fetchAll]));
 
   if (loading) return <div className="card analytics-loading">Chargement...</div>;
 
-  /* ─── Sessions ─────────────────────────────────────────────────── */
+  /* ── Sessions ──────────────────────────────────────────────────── */
   const statusCounts = {};
   for (const s of sessions) statusCounts[s.status] = (statusCounts[s.status] || 0) + 1;
 
-  /* ─── Terminaux ─────────────────────────────────────────────────── */
-  const termExited   = terminals.filter((t) => t.status === 'exited');
+  /* ── Terminaux ─────────────────────────────────────────────────── */
+  const termExited    = terminals.filter((t) => t.status === 'exited');
   const termDurations = termExited
     .filter((t) => t.exitedAt && t.createdAt)
     .map((t) => (new Date(t.exitedAt) - new Date(t.createdAt)) / 60000);
   const avgTermDuration = termDurations.length > 0
-    ? termDurations.reduce((a, b) => a + b, 0) / termDurations.length
-    : 0;
+    ? termDurations.reduce((a, b) => a + b, 0) / termDurations.length : 0;
 
-  /* ─── Squads ─────────────────────────────────────────────────────── */
-  const squadByStatus = {};
-  for (const s of squads) squadByStatus[s.status] = (squadByStatus[s.status] || 0) + 1;
-
-  const completedSquads  = squads.filter((s) => s.status === 'completed').length;
-  const finishedSquads   = squads.filter((s) => ['completed', 'cancelled', 'partial'].includes(s.status)).length;
-  const squadCompletionRate = finishedSquads > 0
-    ? Math.round((completedSquads / finishedSquads) * 100)
-    : null;
-
-  const squadDurations = squads
+  /* ── Squads ────────────────────────────────────────────────────── */
+  const completedSquads     = squads.filter((s) => s.status === 'completed').length;
+  const finishedSquads      = squads.filter((s) => ['completed', 'cancelled', 'partial'].includes(s.status)).length;
+  const squadCompletionRate = finishedSquads > 0 ? Math.round((completedSquads / finishedSquads) * 100) : null;
+  const squadDurations      = squads
     .filter((s) => s.completedAt && s.createdAt)
     .map((s) => (new Date(s.completedAt) - new Date(s.createdAt)) / 60000);
   const avgSquadDuration = squadDurations.length > 0
-    ? squadDurations.reduce((a, b) => a + b, 0) / squadDurations.length
-    : 0;
-
+    ? squadDurations.reduce((a, b) => a + b, 0) / squadDurations.length : 0;
   const avgAgentsPerSquad = squads.length > 0
-    ? (squads.reduce((s, sq) => s + (sq.members?.length || 0), 0) / squads.length).toFixed(1)
-    : 0;
+    ? (squads.reduce((s, sq) => s + (sq.members?.length || 0), 0) / squads.length).toFixed(1) : 0;
 
-  /* ─── Health checks ──────────────────────────────────────────────── */
-  const hcTotal   = healthChecks.length;
-  const hcOk      = healthChecks.filter((hc) => hc.lastResult?.success).length;
-  const hcRate    = hcTotal > 0 ? Math.round((hcOk / hcTotal) * 100) : null;
+  /* ── Health checks ─────────────────────────────────────────────── */
+  const hcTotal = healthChecks.length;
+  const hcOk    = healthChecks.filter((hc) => hc.lastResult?.success).length;
+  const hcRate  = hcTotal > 0 ? Math.round((hcOk / hcTotal) * 100) : null;
 
-  /* ─── Timeline ───────────────────────────────────────────────────── */
+  /* ── Données graphiques ────────────────────────────────────────── */
   const now = Date.now();
-  const hourActivity = new Array(24).fill(0);
-  for (const ev of timeline) {
-    const age = now - new Date(ev.timestamp).getTime();
-    if (age < 86400000) hourActivity[new Date(ev.timestamp).getHours()]++;
-  }
 
+  // Activité par heure (24h) — graphique vertical
+  const hourActivityData = Array.from({ length: 24 }, (_, h) => {
+    const count = timeline.filter((ev) => {
+      const age = now - new Date(ev.timestamp).getTime();
+      return age < 86400000 && new Date(ev.timestamp).getHours() === h;
+    }).length;
+    return { heure: `${String(h).padStart(2, '0')}h`, count };
+  });
+
+  // Événements par type — top 10, horizontal
   const typeCounts = {};
   for (const ev of timeline) {
     const type = (ev.event || ev.type || '').split(':')[0];
     if (type) typeCounts[type] = (typeCounts[type] || 0) + 1;
   }
+  const typeData = Object.entries(typeCounts)
+    .sort((a, b) => b[1] - a[1]).slice(0, 10)
+    .map(([type, count]) => ({ type, count }));
 
-  /* ─── Graphiques ─────────────────────────────────────────────────── */
-  const sessionActivity = sessions
-    .map((s) => ({ label: s.name || s.id?.substring(0, 8), value: s.history?.length || 0 }))
-    .sort((a, b) => b.value - a.value)
-    .slice(0, 8);
+  // Sessions les plus actives — horizontal
+  const sessionActivityData = sessions
+    .map((s) => ({ name: (s.name || s.id?.substring(0, 8) || '?').substring(0, 16), actions: s.history?.length || 0 }))
+    .sort((a, b) => b.actions - a.actions).slice(0, 8);
 
-  const hcResults = healthChecks.map((hc) => ({
-    label: hc.name,
-    status: hc.lastResult?.success ? 'OK' : (hc.lastResult ? 'FAIL' : '—'),
-  }));
+  // Durée terminaux — horizontal, top 8 par durée
+  const termDurationData = termExited
+    .filter((t) => t.exitedAt && t.createdAt)
+    .map((t) => ({
+      name: (t.name || t.id?.substring(0, 8) || '?').substring(0, 16),
+      minutes: Math.round((new Date(t.exitedAt) - new Date(t.createdAt)) / 60000),
+    }))
+    .sort((a, b) => b.minutes - a.minutes).slice(0, 8);
 
-  // Durée des squads (pour graph)
+  // Squads par statut — Pie
+  const squadStatusData = Object.entries(
+    squads.reduce((acc, s) => { acc[s.status] = (acc[s.status] || 0) + 1; return acc; }, {})
+  ).map(([status, value]) => ({ name: status, value }));
+
+  // Durée squads complétés — horizontal
   const squadDurationData = squads
     .filter((s) => s.completedAt && s.createdAt)
-    .sort((a, b) => new Date(b.completedAt) - new Date(a.completedAt))
-    .slice(0, 8)
+    .sort((a, b) => new Date(b.completedAt) - new Date(a.completedAt)).slice(0, 8)
     .map((s) => ({
-      label: s.name.length > 12 ? s.name.substring(0, 12) + '…' : s.name,
-      value: Math.round((new Date(s.completedAt) - new Date(s.createdAt)) / 60000),
+      name: s.name.length > 14 ? s.name.substring(0, 14) + '…' : s.name,
+      minutes: Math.round((new Date(s.completedAt) - new Date(s.createdAt)) / 60000),
     }));
 
-  // Durée des terminaux (top 8 par durée)
-  const terminalDurationData = termExited
-    .filter((t) => t.exitedAt && t.createdAt)
-    .sort((a, b) => (new Date(b.exitedAt) - new Date(b.createdAt)) - (new Date(a.exitedAt) - new Date(a.createdAt)))
-    .slice(0, 8)
-    .map((t) => ({
-      label: (t.name || t.id?.substring(0, 8) || '?').substring(0, 14),
-      value: Math.round((new Date(t.exitedAt) - new Date(t.createdAt)) / 60000),
-    }));
+  /* ── Axes Y (horizontal charts) ─────────────────────────────────── */
+  const yAxisProps = {
+    tick: { fill: C.text, fontSize: 11 },
+    width: 120,
+  };
+  const xAxisProps = {
+    tick: { fill: C.text, fontSize: 11 },
+  };
+  const gridProps = {
+    stroke: C.border, strokeDasharray: '3 3', vertical: false,
+  };
+  const tooltipStyle = { cursor: { fill: 'rgba(139,92,246,0.08)' } };
 
   return (
     <div className="analytics-page">
       <h2 className="analytics-header">Analytics & KPIs</h2>
 
-      {/* ── Métriques sessions/terminaux ──────────────────────────── */}
+      {/* ── KPIs sessions/terminaux ──────────────────────────────── */}
       <div className="kpi-section-title">Sessions & Terminaux</div>
-      <div className="metrics-grid" style={{ marginBottom: 8 }}>
-        <KpiCard value={sessions.length}                   label="Sessions totales"        color="accent" />
-        <KpiCard value={statusCounts.active || 0}          label="Actives"                 color="success" />
-        <KpiCard value={terminals.length}                  label="Terminaux lancés"        color="info" />
+      <div className="metrics-grid">
+        <KpiCard value={sessions.length}               label="Sessions totales"    color={C.accent} />
+        <KpiCard value={statusCounts.active || 0}      label="Actives"             color={C.success} />
+        <KpiCard value={terminals.length}              label="Terminaux lancés"    color={C.info} />
         <KpiCard
           value={fmtDuration(avgTermDuration)}
           label="Durée moy. terminal"
-          color="warning"
+          color={C.warning}
           sub={termDurations.length > 0 ? `sur ${termDurations.length} terminé(s)` : 'aucun terminé'}
         />
       </div>
 
-      {/* ── Métriques squads ──────────────────────────────────────── */}
+      {/* ── KPIs squads ─────────────────────────────────────────── */}
       <div className="kpi-section-title" style={{ marginTop: 20 }}>Squads</div>
-      <div className="metrics-grid" style={{ marginBottom: 8 }}>
-        <KpiCard value={squads.length}                     label="Squads totaux"           color="accent" />
+      <div className="metrics-grid">
+        <KpiCard value={squads.length}                 label="Squads totaux"       color={C.accent} />
         <KpiCard
           value={squadCompletionRate !== null ? `${squadCompletionRate}%` : '—'}
           label="Taux de complétion"
-          color={squadCompletionRate >= 80 ? 'success' : squadCompletionRate >= 50 ? 'warning' : 'error'}
+          color={squadCompletionRate >= 80 ? C.success : squadCompletionRate >= 50 ? C.warning : C.error}
           sub={`${completedSquads}/${finishedSquads} terminé(s)`}
         />
         <KpiCard
           value={fmtDuration(avgSquadDuration)}
           label="Durée moy. squad"
-          color="info"
+          color={C.info}
           sub={squadDurations.length > 0 ? `sur ${squadDurations.length} complété(s)` : 'aucun complété'}
         />
-        <KpiCard value={avgAgentsPerSquad}                 label="Agents / squad (moy.)"   color="warning" />
+        <KpiCard value={avgAgentsPerSquad}             label="Agents / squad"      color={C.warning} />
       </div>
 
-      {/* ── Métriques health checks ──────────────────────────────── */}
+      {/* ── KPIs health checks ───────────────────────────────────── */}
       {hcTotal > 0 && (
         <>
           <div className="kpi-section-title" style={{ marginTop: 20 }}>Health Checks</div>
-          <div className="metrics-grid" style={{ marginBottom: 8 }}>
-            <KpiCard value={hcTotal}                                label="Checks configurés"    color="accent" />
-            <KpiCard value={hcOk}                                   label="OK"                   color="success" />
-            <KpiCard value={hcTotal - hcOk}                         label="En échec"             color="error" />
+          <div className="metrics-grid">
+            <KpiCard value={hcTotal}                   label="Checks configurés"   color={C.accent} />
+            <KpiCard value={hcOk}                      label="OK"                  color={C.success} />
+            <KpiCard value={hcTotal - hcOk}            label="En échec"            color={C.error} />
             <KpiCard
               value={hcRate !== null ? `${hcRate}%` : '—'}
               label="Taux de succès"
-              color={hcRate >= 80 ? 'success' : 'warning'}
+              color={hcRate >= 80 ? C.success : C.warning}
             />
           </div>
         </>
       )}
 
       {/* ── Graphiques ────────────────────────────────────────────── */}
-      <div className="charts-grid" style={{ marginTop: 24 }}>
+      <div className="charts-grid" style={{ marginTop: 28 }}>
+
         {/* Activité par heure */}
-        <div className="card chart-container">
-          <h3 className="chart-title">Activité par heure (24h)</h3>
-          <BarChart
-            data={hourActivity.map((v, h) => ({ label: `${String(h).padStart(2, '0')}h`, value: v }))}
-            color="var(--accent)"
-          />
-        </div>
+        <ChartCard title="Activité par heure (24h)">
+          <ResponsiveContainer width="100%" height={200}>
+            <BarChart data={hourActivityData} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+              <CartesianGrid {...gridProps} />
+              <XAxis dataKey="heure" {...xAxisProps} interval={3} />
+              <YAxis {...{ tick: { fill: C.text, fontSize: 11 } }} allowDecimals={false} />
+              <Tooltip content={<CustomTooltip />} {...tooltipStyle} />
+              <Bar dataKey="count" name="événements" fill={C.accent} radius={[2, 2, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </ChartCard>
 
         {/* Événements par type */}
-        <div className="card chart-container">
-          <h3 className="chart-title">Événements par type</h3>
-          <BarChart
-            data={Object.entries(typeCounts)
-              .sort((a, b) => b[1] - a[1])
-              .slice(0, 10)
-              .map(([label, value]) => ({ label, value }))}
-            color="#3b82f6"
-          />
-        </div>
+        <ChartCard
+          title="Événements par type"
+          empty={typeData.length === 0 ? 'Aucun événement' : null}
+        >
+          <ResponsiveContainer width="100%" height={Math.max(160, typeData.length * 28)}>
+            <BarChart data={typeData} layout="vertical" margin={{ top: 4, right: 24, left: 0, bottom: 0 }}>
+              <CartesianGrid {...gridProps} horizontal={false} vertical />
+              <XAxis type="number" {...xAxisProps} allowDecimals={false} />
+              <YAxis type="category" dataKey="type" {...yAxisProps} />
+              <Tooltip content={<CustomTooltip />} {...tooltipStyle} />
+              <Bar dataKey="count" name="count" fill={C.info} radius={[0, 2, 2, 0]}>
+                {typeData.map((_, i) => (
+                  <Cell key={i} fill={[C.accent, C.info, C.success, C.warning, C.error, C.muted][i % 6]} />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </ChartCard>
 
         {/* Sessions les plus actives */}
-        <div className="card chart-container">
-          <h3 className="chart-title">Sessions les plus actives</h3>
-          {sessionActivity.length === 0 ? (
-            <p className="empty-message">Aucune session</p>
-          ) : (
-            <BarChart data={sessionActivity} color="var(--success)" />
-          )}
-        </div>
+        <ChartCard
+          title="Sessions les plus actives"
+          empty={sessionActivityData.length === 0 ? 'Aucune session' : null}
+        >
+          <ResponsiveContainer width="100%" height={Math.max(120, sessionActivityData.length * 28)}>
+            <BarChart data={sessionActivityData} layout="vertical" margin={{ top: 4, right: 24, left: 0, bottom: 0 }}>
+              <CartesianGrid {...gridProps} horizontal={false} vertical />
+              <XAxis type="number" {...xAxisProps} allowDecimals={false} />
+              <YAxis type="category" dataKey="name" {...yAxisProps} />
+              <Tooltip content={<CustomTooltip />} {...tooltipStyle} />
+              <Bar dataKey="actions" name="actions" fill={C.success} radius={[0, 2, 2, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </ChartCard>
 
         {/* Durée des terminaux */}
-        <div className="card chart-container">
-          <h3 className="chart-title">Durée des terminaux (min)</h3>
-          {terminalDurationData.length === 0 ? (
-            <p className="empty-message">Aucun terminal terminé</p>
-          ) : (
-            <BarChart data={terminalDurationData} color="#f59e0b" />
-          )}
-        </div>
+        <ChartCard
+          title="Durée des terminaux (min)"
+          empty={termDurationData.length === 0 ? 'Aucun terminal terminé' : null}
+        >
+          <ResponsiveContainer width="100%" height={Math.max(120, termDurationData.length * 28)}>
+            <BarChart data={termDurationData} layout="vertical" margin={{ top: 4, right: 24, left: 0, bottom: 0 }}>
+              <CartesianGrid {...gridProps} horizontal={false} vertical />
+              <XAxis type="number" {...xAxisProps} allowDecimals={false} unit="m" />
+              <YAxis type="category" dataKey="name" {...yAxisProps} />
+              <Tooltip content={<CustomTooltip unit="m" />} {...tooltipStyle} />
+              <Bar dataKey="minutes" name="durée" fill={C.warning} radius={[0, 2, 2, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </ChartCard>
 
-        {/* Statut des squads */}
-        {squads.length > 0 && (
-          <div className="card chart-container">
-            <h3 className="chart-title">Squads par statut</h3>
-            <BarChart
-              data={Object.entries(squadByStatus)
-                .sort((a, b) => b[1] - a[1])
-                .map(([label, value]) => ({ label, value }))}
-              color="var(--accent)"
-            />
-          </div>
+        {/* Squads par statut — Donut */}
+        {squadStatusData.length > 0 && (
+          <ChartCard title="Squads par statut">
+            <ResponsiveContainer width="100%" height={220}>
+              <PieChart>
+                <Pie
+                  data={squadStatusData}
+                  cx="50%" cy="50%"
+                  innerRadius={55} outerRadius={85}
+                  dataKey="value"
+                  label={({ name, value }) => `${name} (${value})`}
+                  labelLine={false}
+                >
+                  {squadStatusData.map((entry, i) => (
+                    <Cell key={i} fill={SQUAD_STATUS_COLORS[entry.name] || C.muted} />
+                  ))}
+                </Pie>
+                <Tooltip content={<CustomTooltip />} />
+                <Legend
+                  iconType="circle" iconSize={8}
+                  formatter={(val) => <span style={{ color: C.text, fontSize: 12 }}>{val}</span>}
+                />
+              </PieChart>
+            </ResponsiveContainer>
+          </ChartCard>
         )}
 
-        {/* Durée des squads */}
+        {/* Durée des squads complétés */}
         {squadDurationData.length > 0 && (
-          <div className="card chart-container">
-            <h3 className="chart-title">Durée des squads complétés (min)</h3>
-            <BarChart data={squadDurationData} color="#10b981" />
-          </div>
+          <ChartCard title="Durée des squads complétés (min)">
+            <ResponsiveContainer width="100%" height={Math.max(120, squadDurationData.length * 28)}>
+              <BarChart data={squadDurationData} layout="vertical" margin={{ top: 4, right: 24, left: 0, bottom: 0 }}>
+                <CartesianGrid {...gridProps} horizontal={false} vertical />
+                <XAxis type="number" {...xAxisProps} allowDecimals={false} unit="m" />
+                <YAxis type="category" dataKey="name" {...yAxisProps} />
+                <Tooltip content={<CustomTooltip unit="m" />} {...tooltipStyle} />
+                <Bar dataKey="minutes" name="durée" fill={C.success} radius={[0, 2, 2, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </ChartCard>
         )}
 
         {/* Health checks */}
-        {hcResults.length > 0 && (
-          <div className="card chart-container">
-            <h3 className="chart-title">Health Checks</h3>
+        {healthChecks.length > 0 && (
+          <ChartCard title="Health Checks">
             <div className="hc-list">
-              {hcResults.map((hc, i) => (
-                <div key={i} className="hc-row">
-                  <span className="hc-name">{hc.label}</span>
-                  <span className={`hc-badge hc-${hc.status.toLowerCase()}`}>{hc.status}</span>
-                </div>
-              ))}
+              {healthChecks.map((hc, i) => {
+                const ok = hc.lastResult?.success;
+                const status = hc.lastResult ? (ok ? 'OK' : 'FAIL') : '—';
+                return (
+                  <div key={i} className="hc-row">
+                    <span className="hc-name">{hc.name}</span>
+                    <span className="hc-badge" style={{
+                      background: ok ? 'rgba(16,185,129,0.15)' : hc.lastResult ? 'rgba(239,68,68,0.15)' : 'rgba(100,116,139,0.15)',
+                      color: ok ? C.success : hc.lastResult ? C.error : C.muted,
+                    }}>
+                      {status}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
-          </div>
+          </ChartCard>
         )}
       </div>
 
@@ -331,9 +422,7 @@ export default function Analytics() {
                       <td className="history-td history-td-mono">{t.model || '—'}</td>
                       <td className="history-td history-td-num">
                         {durMin !== null ? fmtDuration(durMin) : '—'}
-                        {!t.exitedAt && t.status === 'running' && (
-                          <span className="kpi-live-dot" title="En cours" />
-                        )}
+                        {!t.exitedAt && t.status === 'running' && <span className="kpi-live-dot" />}
                       </td>
                       <td className="history-td history-td-date">
                         {t.createdAt ? new Date(t.createdAt).toLocaleString('fr-FR') : '—'}
@@ -365,14 +454,12 @@ export default function Analytics() {
               {[...squads]
                 .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
                 .map((sq) => {
-                  const done = (sq.members || []).filter((m) => m.status === 'completed' || m.status === 'exited').length;
+                  const done  = (sq.members || []).filter((m) => m.status === 'completed' || m.status === 'exited').length;
                   const total = (sq.members || []).length;
-                  const rate = total > 0 ? Math.round((done / total) * 100) : 0;
+                  const rate  = total > 0 ? Math.round((done / total) * 100) : 0;
                   const durMin = sq.completedAt && sq.createdAt
                     ? (new Date(sq.completedAt) - new Date(sq.createdAt)) / 60000
-                    : sq.createdAt && sq.status === 'running'
-                      ? (now - new Date(sq.createdAt)) / 60000
-                      : null;
+                    : sq.status === 'running' && sq.createdAt ? (now - new Date(sq.createdAt)) / 60000 : null;
                   return (
                     <tr key={sq.id} className="history-row">
                       <td className="history-td" style={{ fontWeight: 600 }}>{sq.name}</td>
@@ -390,7 +477,7 @@ export default function Analytics() {
                       </td>
                       <td className="history-td history-td-num">
                         {durMin !== null ? fmtDuration(durMin) : '—'}
-                        {sq.status === 'running' && <span className="kpi-live-dot" title="En cours" />}
+                        {sq.status === 'running' && <span className="kpi-live-dot" />}
                       </td>
                       <td className="history-td history-td-date">
                         {sq.createdAt ? new Date(sq.createdAt).toLocaleString('fr-FR') : '—'}
@@ -408,67 +495,42 @@ export default function Analytics() {
         .analytics-header { margin-bottom: 20px; }
         .analytics-loading { text-align: center; padding: 32px; }
 
-        /* Titres de section KPI */
-        .kpi-section-title { font-size: 11px; font-weight: 700; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 8px; }
-
-        /* Grille de métriques */
+        .kpi-section-title { font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 8px; }
         .metrics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
         .metric-card { text-align: center; padding: 16px 12px; }
         .metric-value { font-size: 26px; font-weight: 700; line-height: 1.2; }
-        .metric-value.accent  { color: var(--accent); }
-        .metric-value.success { color: var(--success, #10b981); }
-        .metric-value.warning { color: var(--warning, #f59e0b); }
-        .metric-value.error   { color: var(--error,   #ef4444); }
-        .metric-value.info    { color: #3b82f6; }
         .metric-label { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
         .metric-sub   { font-size: 10px; color: var(--text-secondary); margin-top: 2px; opacity: 0.7; }
 
-        /* Grille graphiques */
         .charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
         .chart-container { }
-        .chart-title { margin-bottom: 12px; font-size: 14px; }
-
-        /* BarChart */
-        .bar-chart { display: grid; gap: 4px; }
-        .bar-row   { display: flex; align-items: center; gap: 8px; }
-        .bar-label { width: 80px; font-size: 11px; color: var(--text-secondary); text-align: right; flex-shrink: 0; }
-        .bar-fill  { height: 18px; border-radius: 3px; opacity: 0.8; transition: width 0.3s; }
-        .bar-value { font-size: 12px; color: var(--text-primary); font-weight: 600; }
-
-        /* Vide */
+        .chart-title { margin-bottom: 14px; font-size: 14px; }
         .empty-message { color: var(--text-secondary); font-size: 13px; margin: 0; }
 
-        /* Health checks */
         .hc-list { display: grid; gap: 6px; }
         .hc-row  { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--border); }
         .hc-row:last-child { border-bottom: none; }
         .hc-name  { font-size: 13px; color: var(--text-primary); }
         .hc-badge { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 10px; }
-        .hc-ok    { background: rgba(16,185,129,0.15); color: var(--success, #10b981); }
-        .hc-fail  { background: rgba(239,68,68,0.15);  color: var(--error,   #ef4444); }
-        .hc-—     { background: var(--bg-secondary); color: var(--text-secondary); }
 
-        /* Tableaux */
         .history-section { margin-top: 16px; }
         .history-table   { width: 100%; border-collapse: collapse; font-size: 13px; }
         .history-thead-row { border-bottom: 1px solid var(--border); }
-        .history-th      { text-align: left; padding: 6px 8px; color: var(--text-secondary); font-weight: 600; font-size: 12px; }
-        .history-row     { border-bottom: 1px solid var(--border); }
+        .history-th { text-align: left; padding: 6px 8px; color: var(--text-secondary); font-weight: 600; font-size: 12px; }
+        .history-row { border-bottom: 1px solid var(--border); }
         .history-row:hover { background: rgba(255,255,255,0.02); }
-        .history-td      { padding: 6px 8px; }
+        .history-td { padding: 6px 8px; }
         .history-td-date { font-size: 11px; color: var(--text-secondary); }
         .history-td-num  { font-size: 12px; font-weight: 600; font-family: monospace; }
         .history-td-mono { font-family: 'Cascadia Code', Consolas, monospace; font-size: 11px; color: var(--text-secondary); }
 
-        /* Barre complétion squads */
         .sq-rate-bar  { width: 60px; height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
         .sq-rate-fill { height: 100%; background: var(--accent); border-radius: 3px; }
 
-        /* Pastille "live" */
-        .kpi-live-dot { display: inline-block; width: 6px; height: 6px; background: var(--success, #10b981); border-radius: 50%; margin-left: 5px; animation: pulse-dot 1.5s ease-in-out infinite; vertical-align: middle; }
+        .kpi-live-dot { display: inline-block; width: 6px; height: 6px; background: #10b981; border-radius: 50%; margin-left: 5px; animation: pulse-dot 1.5s ease-in-out infinite; vertical-align: middle; }
         @keyframes pulse-dot { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
 
-        @media (max-width: 768px) {
+        @media (max-width: 900px) {
           .charts-grid { grid-template-columns: 1fr; }
           .metrics-grid { grid-template-columns: repeat(2, 1fr); }
         }
