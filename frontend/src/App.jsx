@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import Conflicts from './pages/Conflicts';
 import SharedContext from './pages/SharedContext';
@@ -10,10 +10,12 @@ import Orchestrator from './pages/Orchestrator';
 import Sidebar from './components/Sidebar';
 
 export default function App() {
+  const [collapsed, setCollapsed] = useState(false);
+
   return (
     <div className="app-layout">
-      <Sidebar />
-      <main className="main-content">
+      <Sidebar collapsed={collapsed} onToggle={() => setCollapsed((v) => !v)} />
+      <main className={`main-content${collapsed ? ' sidebar-collapsed' : ''}`}>
         <Routes>
           <Route path="/" element={<Navigate to="/terminals" replace />} />
           <Route path="/conflicts" element={<Conflicts />} />

@@ -33,6 +33,10 @@ body {
   flex: 1;
   padding: 24px;
   margin-left: 240px;
+  transition: margin-left 0.25s ease;
+}
+.main-content.sidebar-collapsed {
+  margin-left: 44px;
 }
 
 .card {
