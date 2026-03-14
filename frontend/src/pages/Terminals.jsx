@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Terminal as XTerm } from 'xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { SearchAddon } from '@xterm/addon-search';
 import 'xterm/css/xterm.css';
 import GitDiffPanel from '../components/GitDiffPanel';
 
@@ -18,18 +19,24 @@ const LAYOUTS = [
  * Gère le replay du buffer au montage et à chaque reconnexion WS.
  */
 function TerminalView({ terminalId, terminalName, terminalDirectory, onClose, onRename, compact = false }) {
-  const containerRef = useRef(null);
-  const xtermRef     = useRef(null);
-  const fitAddonRef  = useRef(null);
-  const wsRef        = useRef(null);
-  const destroyedRef = useRef(false);
+  const containerRef   = useRef(null);
+  const xtermRef       = useRef(null);
+  const fitAddonRef    = useRef(null);
+  const searchAddonRef = useRef(null);
+  const wsRef          = useRef(null);
+  const destroyedRef   = useRef(false);
   const reconnTimerRef = useRef(null);
+  const searchInputRef = useRef(null);
 
-  const [editing,   setEditing]   = useState(false);
-  const [editName,  setEditName]  = useState(terminalName || '');
-  const [showDiff,  setShowDiff]  = useState(false);
-  const [replaying, setReplaying] = useState(false); // lecture buffer en cours
-  const [wsStatus,  setWsStatus]  = useState('connecting'); // connecting | open | closed
+  const [editing,     setEditing]     = useState(false);
+  const [editName,    setEditName]    = useState(terminalName || '');
+  const [showDiff,    setShowDiff]    = useState(false);
+  const [replaying,   setReplaying]   = useState(false);
+  const [wsStatus,    setWsStatus]    = useState('connecting');
+  const [searchOpen,  setSearchOpen]  = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [matchCase,   setMatchCase]   = useState(false);
+  const [matchInfo,   setMatchInfo]   = useState(null); // { current, total } | null
 
   useEffect(() => {
     if (!containerRef.current || !terminalId) return;
@@ -50,16 +57,30 @@ function TerminalView({ terminalId, terminalName, terminalDirectory, onClose, on
       rightClickSelectsWord: true,
     });
 
-    const fitAddon = new FitAddon();
+    const fitAddon    = new FitAddon();
+    const searchAddon = new SearchAddon();
     xterm.loadAddon(fitAddon);
+    xterm.loadAddon(searchAddon);
     xterm.open(containerRef.current);
     requestAnimationFrame(() => fitAddon.fit());
 
-    xtermRef.current    = xterm;
-    fitAddonRef.current = fitAddon;
+    xtermRef.current       = xterm;
+    fitAddonRef.current    = fitAddon;
+    searchAddonRef.current = searchAddon;
 
     /* ── Copier/coller ────────────────────────────────────────── */
     xterm.attachCustomKeyEventHandler((e) => {
+      // Ctrl+F — ouvrir/fermer la recherche
+      if (e.ctrlKey && e.key === 'f' && e.type === 'keydown') {
+        setSearchOpen((v) => !v);
+        return false;
+      }
+      // Échap — fermer la recherche si ouverte
+      if (e.key === 'Escape' && e.type === 'keydown') {
+        setSearchOpen(false);
+        searchAddon.clearDecorations?.();
+        return false;
+      }
       if (e.ctrlKey && e.key === 'c' && xterm.hasSelection()) {
         navigator.clipboard.writeText(xterm.getSelection());
         return false;
@@ -98,6 +119,11 @@ function TerminalView({ terminalId, terminalName, terminalDirectory, onClose, on
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ data }),
       }).catch(() => {});
+    });
+
+    /* ── Focus auto sur le terminal (hors recherche) ─────────── */
+    containerRef.current?.addEventListener('click', () => {
+      if (!searchInputRef.current?.matches(':focus')) xterm.focus();
     });
 
     /* ── Resize ───────────────────────────────────────────────── */
@@ -174,7 +200,55 @@ function TerminalView({ terminalId, terminalName, terminalDirectory, onClose, on
     };
   }, [terminalId, compact]);
 
+  /* ── Focus input quand la barre s'ouvre ──────────────────────── */
+  useEffect(() => {
+    if (searchOpen) {
+      setTimeout(() => searchInputRef.current?.focus(), 30);
+    } else {
+      setMatchInfo(null);
+      searchAddonRef.current?.clearDecorations?.();
+      xtermRef.current?.focus();
+    }
+  }, [searchOpen]);
+
+  /* ── Lancer la recherche dès que la query/options changent ──── */
+  useEffect(() => {
+    if (!searchOpen || !searchAddonRef.current) return;
+    if (!searchQuery) {
+      searchAddonRef.current.clearDecorations?.();
+      setMatchInfo(null);
+      return;
+    }
+    const found = searchAddonRef.current.findNext(searchQuery, {
+      caseSensitive: matchCase,
+      incremental: true,
+      decorations: {
+        matchBackground:        '#f59e0b33',
+        matchBorder:            '#f59e0b',
+        activeMatchBackground:  '#f59e0b88',
+        activeMatchBorder:      '#f59e0b',
+        activeMatchColorOverviewRuler: '#f59e0b',
+      },
+    });
+    setMatchInfo(found ? { found: true } : { found: false });
+  }, [searchQuery, matchCase, searchOpen]);
+
+  const searchNext = () => {
+    if (!searchAddonRef.current || !searchQuery) return;
+    searchAddonRef.current.findNext(searchQuery, { caseSensitive: matchCase });
+  };
+
+  const searchPrev = () => {
+    if (!searchAddonRef.current || !searchQuery) return;
+    searchAddonRef.current.findPrevious(searchQuery, { caseSensitive: matchCase });
+  };
+
   const headerHeight = compact ? 28 : 36;
+
+  const srchBtnStyle = {
+    background: 'none', border: '1px solid #2a2b3d', borderRadius: 4,
+    color: '#a9b1d6', cursor: 'pointer', fontSize: 11, padding: '2px 7px',
+  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -228,6 +302,20 @@ function TerminalView({ terminalId, terminalName, terminalDirectory, onClose, on
               animation: (wsStatus !== 'open' || replaying) ? 'ws-blink 1s ease-in-out infinite' : 'none',
             }}
           />
+          {/* Bouton recherche */}
+          <button
+            onClick={() => setSearchOpen((v) => !v)}
+            title="Rechercher (Ctrl+F)"
+            style={{
+              background: searchOpen ? 'rgba(139,92,246,0.25)' : 'none',
+              color: searchOpen ? '#8b5cf6' : '#c0caf5',
+              border: '1px solid var(--border)', borderRadius: 4,
+              padding: compact ? '1px 5px' : '2px 7px',
+              cursor: 'pointer', fontSize: compact ? 10 : 11, fontWeight: 600,
+            }}
+          >
+            🔍
+          </button>
           <button
             onClick={() => setShowDiff(v => !v)}
             style={{
@@ -250,6 +338,53 @@ function TerminalView({ terminalId, terminalName, terminalDirectory, onClose, on
           </button>
         </div>
       </div>
+
+      {/* Barre de recherche */}
+      {searchOpen && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 6,
+          padding: '4px 8px', background: '#1f2335',
+          borderBottom: '1px solid #2a2b3d', flexShrink: 0,
+        }}>
+          <input
+            ref={searchInputRef}
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter')       { e.shiftKey ? searchPrev() : searchNext(); }
+              if (e.key === 'Escape')      { setSearchOpen(false); }
+              if (e.key === 'ArrowDown')   { searchNext(); }
+              if (e.key === 'ArrowUp')     { searchPrev(); }
+            }}
+            placeholder="Rechercher…"
+            style={{
+              flex: 1, background: '#1a1b26', border: '1px solid #2a2b3d',
+              borderRadius: 4, padding: '3px 8px', color: '#c0caf5',
+              fontSize: 12, fontFamily: 'monospace', outline: 'none',
+              borderColor: matchInfo?.found === false ? '#ef4444' : searchQuery ? '#8b5cf6' : '#2a2b3d',
+            }}
+          />
+          {/* Résultat */}
+          {searchQuery && (
+            <span style={{ fontSize: 11, color: matchInfo?.found === false ? '#ef4444' : '#a9b1d6', whiteSpace: 'nowrap' }}>
+              {matchInfo?.found === false ? 'Aucun résultat' : ''}
+            </span>
+          )}
+          {/* Précédent / Suivant */}
+          <button onClick={searchPrev} title="Précédent (Shift+Enter)" style={srchBtnStyle}>▲</button>
+          <button onClick={searchNext} title="Suivant (Enter)" style={srchBtnStyle}>▼</button>
+          {/* Casse */}
+          <button
+            onClick={() => setMatchCase((v) => !v)}
+            title="Respecter la casse"
+            style={{ ...srchBtnStyle, background: matchCase ? 'rgba(139,92,246,0.25)' : 'none', color: matchCase ? '#8b5cf6' : '#a9b1d6', fontFamily: 'monospace' }}
+          >
+            Aa
+          </button>
+          {/* Fermer */}
+          <button onClick={() => setSearchOpen(false)} title="Fermer (Échap)" style={{ ...srchBtnStyle, color: '#ef4444' }}>✕</button>
+        </div>
+      )}
 
       {/* Corps : terminal ou diff */}
       {showDiff ? (
