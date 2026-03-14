@@ -1,15 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useWebSocket } from '../services/websocket';
-
-const STATUS_COLOR = {
-  running: '#8b5cf6', completed: '#10b981', exited: '#10b981',
-  waiting: '#64748b', error: '#ef4444', cancelled: '#f59e0b', killed: '#ef4444',
-};
-const ANSI_RE = /\x1b\[[0-9;]*[a-zA-Z]/g; // eslint-disable-line no-control-regex
-const cleanAnsi = (s) => (s || '').replace(ANSI_RE, '');
-const lastLines = (raw, n = 4) =>
-  cleanAnsi(raw).split('\n').map((l) => l.trimEnd()).filter(Boolean).slice(-n).join('\n');
+import { STATUS_COLOR, cleanAnsi, lastLines } from '../utils/agent-utils';
 
 /* ── Carte KPI ───────────────────────────────────────────────────── */
 function Kpi({ value, label, color = '#8b5cf6', onClick }) {
