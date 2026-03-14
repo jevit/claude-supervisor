@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useWebSocket } from '../services/websocket';
+const cleanAnsi = (s) => (s || '').replace(/\x1b\[[0-9;]*[a-zA-Z]/g, ''); // eslint-disable-line no-control-regex
 
 const STATUS_COLORS = {
   running:   'var(--accent)',
@@ -33,8 +34,7 @@ function MemberPanel({ member }) {
         .then((data) => {
           if (data.output) {
             // Garder les 25 dernieres lignes (nettoyer les codes ANSI)
-            const clean = data.output.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
-            const lines = clean.split('\n').filter((l) => l.trim());
+                        const lines = cleanAnsi(data.output).split('\n').filter((l) => l.trim());
             setOutput(lines.slice(-25).join('\n'));
           }
         })
