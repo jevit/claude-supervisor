@@ -1,5 +1,5 @@
 const express = require('express');
-const { runGit, parseGitStatus } = require('../services/git-utils');
+const { runGit, runGitStrict, parseGitStatus, getFullDiff } = require('../services/git-utils');
 const router = express.Router();
 
 // Diff generique pour n'importe quel repertoire
@@ -17,39 +17,8 @@ router.post('/diff', async (req, res) => {
     }
   }
   try {
-    const [statusRaw, diffUnstaged, diffStaged] = await Promise.all([
-      runGit(['status', '--porcelain'], directory),
-      runGit(['diff'], directory),
-      runGit(['diff', '--cached'], directory),
-    ]);
-    const { files, summary } = parseGitStatus(statusRaw);
-    const combinedDiff = [diffUnstaged, diffStaged].filter(Boolean).join('\n');
-    // Diff individuel par fichier
-    for (const f of files) {
-      try {
-        if (f.status === 'untracked') {
-          // /dev/null ne fonctionne pas sur Windows — afficher le contenu du fichier
-          try {
-            f.diff = await runGit(['diff', '--no-index', 'NUL', f.path], directory);
-          } catch {
-            f.diff = await runGit(['show', `:${f.path}`], directory).catch(() => '');
-          }
-        } else {
-          f.diff = await runGit(['diff', 'HEAD', '--', f.path], directory);
-          if (!f.diff) f.diff = await runGit(['diff', '--cached', '--', f.path], directory);
-        }
-      } catch { f.diff = ''; }
-    }
-    // Derniers commits pour contexte (affichés même si working tree propre)
-    let recentCommits = [];
-    try {
-      const logRaw = await runGit(['log', '--oneline', '-8', '--decorate'], directory);
-      recentCommits = logRaw.split('\n').filter(Boolean).map((line) => {
-        const [hash, ...rest] = line.split(' ');
-        return { hash, message: rest.join(' ') };
-      });
-    } catch {}
-    res.json({ files, summary, combinedDiff, recentCommits });
+    const result = await getFullDiff(directory);
+    res.json(result);
   } catch (err) {
     if (err.message?.includes('not a git repository') || err.stderr?.includes('not a git repository')) {
       return res.status(400).json({ error: 'Pas un depot git', directory });
@@ -73,7 +42,7 @@ router.post('/stage-all', async (req, res) => {
   const { directory } = req.body;
   if (!directory) return res.status(400).json({ error: 'directory required' });
   try {
-    await runGit(['add', '-A'], directory);
+    await runGitStrict(['add', '-A'], directory);
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -107,7 +76,7 @@ router.post('/commit', async (req, res) => {
   const { directory, message } = req.body;
   if (!directory || !message) return res.status(400).json({ error: 'directory and message required' });
   try {
-    const out = await runGit(['commit', '-m', message], directory);
+    const out = await runGitStrict(['commit', '-m', message], directory);
     res.json({ success: true, output: out });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -190,6 +159,16 @@ router.delete('/queue/:id', (req, res) => {
   const cancelled = gitOrchestrator.cancel(req.params.id);
   if (!cancelled) return res.status(404).json({ error: 'Queue entry not found' });
   res.json({ cancelled: true });
+});
+
+// Push vers le remote
+router.post('/push', async (req, res) => {
+  const { directory } = req.body;
+  if (!directory) return res.status(400).json({ error: 'directory required' });
+  try {
+    const out = await runGitStrict(['push'], directory);
+    res.json({ success: true, output: out });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // Branches actives dans un repertoire

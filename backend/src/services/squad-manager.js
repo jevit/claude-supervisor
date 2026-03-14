@@ -1,4 +1,6 @@
 const { randomUUID } = require('crypto');
+const fs = require('fs');
+const path = require('path');
 
 /**
  * SquadManager - Orchestrateur de squads (groupes de terminaux Claude Code).
@@ -136,6 +138,23 @@ class SquadManager {
         }))),
         'squad-manager'
       );
+
+      // Spawner l'agent coordinateur si le squad a au moins 2 membres
+      if (tasks.length >= 2) {
+        this._spawnCoordinator(squad, tasks);
+      }
+    }
+
+    // Créer le fichier SQUAD.md de coordination dans le répertoire du squad
+    try {
+      const squadMdPath = path.join(squad.directory, 'SQUAD.md');
+      const agentLines = tasks
+        .map((t) => `## ${t.name || 'Agent'}\n- **Tâche** : ${t.task}\n- **Statut** : ⏳ en attente de démarrage${t.dependsOn?.length ? `\n- **Attend** : ${t.dependsOn.join(', ')}` : ''}\n`)
+        .join('\n');
+      const content = `# Squad : ${name}\n\n**Objectif** : ${goal}  \n**Démarré le** : ${new Date().toLocaleString('fr-FR')}\n\n---\n\n${agentLines}\n---\n*Ce fichier est mis à jour par chaque agent au fil de sa progression.*\n`;
+      fs.writeFileSync(squadMdPath, content, 'utf8');
+    } catch (err) {
+      console.warn(`SquadManager: impossible de créer SQUAD.md: ${err.message}`);
     }
 
     this.squads.set(squadId, squad);
@@ -145,11 +164,54 @@ class SquadManager {
   }
 
   /**
+   * Extrait et nettoie la sortie utile d'un terminal (supprime ANSI, lignes vides, prompts shell).
+   */
+  _extractOutput(terminalId, maxChars = 3000) {
+    const raw = this.terminalManager.getOutput(terminalId, maxChars + 500) || '';
+    return raw
+      .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '') // codes ANSI
+      .replace(/\r/g, '')
+      .split('\n')
+      .filter((l) => l.trim() && !/^(\$|>|#|❯|➜)\s/.test(l.trim())) // prompts shell
+      .join('\n')
+      .trim()
+      .slice(-maxChars);
+  }
+
+  /**
    * Spawner un membre en attente dont les dépendances sont désormais satisfaites.
+   * Injecte les sorties des agents terminés dans le prompt.
    */
   _spawnWaitingMember(squad, member) {
     const cfg = member._spawnConfig;
     if (!cfg) return;
+
+    // Injecter les résultats des agents dont ce membre dépend
+    // Source 1 : SharedContext (résumé structuré posé par l'agent via MCP)
+    // Source 2 : buffer terminal (fallback si pas de résumé MCP)
+    const depOutputs = member.dependsOn
+      .map((depName) => {
+        const dep = squad.members.find((m) => m.name === depName);
+        if (!dep?.id) return null;
+
+        // Préférer le résumé MCP si disponible
+        const ctxKey = `squad:result:${depName}`;
+        const ctxEntry = this.sharedContext?.get(ctxKey);
+        const structured = ctxEntry?.value;
+
+        const output = structured || this._extractOutput(dep.id);
+        if (!output) return null;
+
+        const source = structured ? '(résumé structuré)' : '(sortie terminal)';
+        return `\n\n=== RÉSULTATS DE L'AGENT "${depName}" ${source} ===\n${output}\n=== FIN RÉSULTATS ${depName} ===`;
+      })
+      .filter(Boolean)
+      .join('\n');
+
+    if (depOutputs) {
+      cfg.prompt += `\n\n---\nCONTEXTE DES AGENTS PRÉCÉDENTS (utilise ces résultats comme base de travail) :${depOutputs}`;
+    }
+
     try {
       const result = this.terminalManager.spawn(cfg);
       member.id = result.terminalId;
@@ -192,6 +254,63 @@ class SquadManager {
   }
 
   /**
+   * Spawner l'agent coordinateur du squad.
+   * Il surveille la progression, relaie les blocages et alerte sur les conflits.
+   */
+  _spawnCoordinator(squad, tasks) {
+    const memberNames = tasks.map((t) => t.name || 'Agent').join(', ');
+    const memberList  = tasks
+      .map((t) => `- ${t.name || 'Agent'} : ${t.task}${t.dependsOn?.length ? ` (attend: ${t.dependsOn.join(', ')})` : ''}`)
+      .join('\n');
+
+    const prompt = `Tu es le COORDINATEUR du squad "${squad.name}".
+Tu ne codes pas — tu supervises, débloques et facilites la communication.
+
+MISSION GLOBALE: ${squad.goal}
+
+AGENTS SOUS TA SUPERVISION:
+${memberList}
+
+TES RESPONSABILITÉS:
+1. Vérifier régulièrement la progression via supervisor_get_context (clé "squad:result:NomAgent")
+2. Si un agent semble bloqué, lui envoyer un message d'aide via supervisor_send_message
+3. Détecter les conflits potentiels (deux agents modifiant les mêmes fichiers) et alerter
+4. Quand tous les agents ont terminé (clé "squad:result:*" renseignées), produire une synthèse finale
+5. Écrire la synthèse dans SharedContext : supervisor_set_context clé "squad:result:Coordinateur"
+
+AGENTS À SUPERVISER: ${memberNames}
+
+Commence par attendre 60 secondes, puis vérifie la progression. Répète toutes les 2 minutes.
+Quand le squad est terminé, dis "TASK COMPLETE".`;
+
+    try {
+      const result = this.terminalManager.spawn({
+        directory: squad.directory,
+        name: `[Squad] Coordinateur`,
+        prompt,
+        model: squad.model || undefined,
+      });
+
+      // Ajouter comme membre spécial (non bloquant pour la complétion du squad)
+      squad.members.push({
+        id: result.terminalId,
+        name: 'Coordinateur',
+        task: 'Supervision et coordination du squad',
+        dependsOn: [],
+        branch: null,
+        worktreePath: null,
+        status: 'running',
+        progress: 0,
+        isCoordinator: true,
+        startedAt: new Date().toISOString(),
+        completedAt: null,
+      });
+    } catch (err) {
+      console.warn(`SquadManager: echec spawn coordinateur: ${err.message}`);
+    }
+  }
+
+  /**
    * Construire le prompt d'un membre du squad.
    */
   _buildPrompt(squad, memberName, task, allTasks, useWorktrees) {
@@ -204,6 +323,8 @@ class SquadManager {
       ? `\nBRANCHE GIT: Tu travailles sur une branche isolée. Commits libres.`
       : '';
 
+    const otherNames = allTasks.filter((t) => (t.name || '') !== memberName).map((t) => t.name || 'Agent');
+
     return `Tu es l'agent "${memberName}" dans un squad de ${allTasks.length} agents.
 
 MISSION GLOBALE: ${squad.goal}
@@ -215,11 +336,23 @@ Répertoire de travail: ${squad.directory}${worktreeNote}
 AUTRES AGENTS DU SQUAD:
 ${otherTasks || '(aucun)'}
 
+FICHIER DE COORDINATION PARTAGÉ:
+- Lis ${squad.directory}/SQUAD.md au démarrage (si existant) pour voir la progression des autres
+- Mets-le à jour quand tu démarres ("🔄 en cours"), et à la fin ("✅ terminé — résumé court")
+- Ne pas supprimer les sections des autres agents
+
+COMMUNICATION INTER-AGENTS (outils MCP disponibles):
+- Partager un résultat intermédiaire : supervisor_set_context avec clé "squad:result:${memberName}" et ta valeur
+- Lire ce qu'ont produit les autres : supervisor_get_context avec clé "squad:result:NomAgent"${otherNames.length ? `\n  Agents disponibles : ${otherNames.join(', ')}` : ''}
+- Signaler un bloqueur ou envoyer un message : supervisor_send_message avec to="NomAgent" ou to="all"
+- Lire tes messages entrants : supervisor_get_context avec clé "squad:msg:${memberName}"
+
 REGLES DE COORDINATION:
 - Concentre-toi UNIQUEMENT sur ta tâche assignée
 - Ne modifie PAS les fichiers en dehors du scope de ta tâche
+- Écris tes résultats clés dans SharedContext (supervisor_set_context) avant de terminer
 - Quand tu as terminé, dis clairement "TASK COMPLETE"
-- Si tu découvres quelque chose d'important pour les autres, mentionne-le clairement`;
+- Si tu découvres quelque chose d'important pour les autres, utilise supervisor_send_message`;
   }
 
   getSquad(squadId) {
@@ -322,13 +455,14 @@ REGLES DE COORDINATION:
       if (anySpawned) changed = true;
     }
 
-    // Vérifier si le squad est entièrement terminé
-    const waiting = squad.members.filter((m) => m.status === 'waiting').length;
-    const running = squad.members.filter((m) => m.status === 'running').length;
+    // Vérifier si le squad est entièrement terminé (exclure le coordinateur du décompte)
+    const workers = squad.members.filter((m) => !m.isCoordinator);
+    const waiting = workers.filter((m) => m.status === 'waiting').length;
+    const running = workers.filter((m) => m.status === 'running').length;
 
     if (waiting === 0 && running === 0 && squad.status === 'running') {
-      const completed = squad.members.filter((m) => m.status === 'completed' || m.status === 'exited').length;
-      squad.status = completed === squad.members.length ? 'completed' : 'partial';
+      const completed = workers.filter((m) => m.status === 'completed' || m.status === 'exited').length;
+      squad.status = completed === workers.length ? 'completed' : 'partial';
       squad.completedAt = new Date().toISOString();
       changed = true;
       this.broadcast('squad:completed', {

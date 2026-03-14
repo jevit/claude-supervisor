@@ -1,5 +1,4 @@
 const { randomUUID } = require('crypto');
-const crypto = { randomUUID };
 
 /**
  * TerminalTracker - Monitors multiple Claude Code terminal sessions.
@@ -84,7 +83,7 @@ class TerminalTracker {
     const session = this.sessions.get(sessionId);
     if (!session) return null;
     if (!session.taskQueue) session.taskQueue = [];
-    const entry = { id: crypto.randomUUID(), task, queuedAt: new Date().toISOString() };
+    const entry = { id: randomUUID(), task, queuedAt: new Date().toISOString() };
     session.taskQueue.push(entry);
     this._persist();
     this.broadcast('session:updated', this._normalize(session));

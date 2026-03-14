@@ -123,7 +123,7 @@ router.get('/:id/diff', async (req, res) => {
   if (!term) return res.status(404).json({ error: 'Terminal non trouve' });
   try {
     const result = await getFullDiff(term.directory);
-    res.json(result);
+    res.json({ ...result, directory: term.directory });
   } catch (err) {
     if (err.message?.includes('not a git repository') || err.stderr?.includes('not a git repository')) {
       return res.status(400).json({ error: 'Pas un depot git', directory: term.directory });

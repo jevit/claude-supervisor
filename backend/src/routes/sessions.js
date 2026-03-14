@@ -244,7 +244,9 @@ router.post('/broadcast-command', (req, res) => {
             terminalManager.kill(term.id);
           }
           count++;
-        } catch {}
+        } catch (err) {
+          console.warn(`sessions broadcast-command: echec sur terminal ${term.id}: ${err.message}`);
+        }
       }
     }
   }

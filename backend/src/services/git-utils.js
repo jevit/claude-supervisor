@@ -1,6 +1,9 @@
 const { execFile } = require('child_process');
 const { promisify } = require('util');
+const os = require('os');
 const execFileAsync = promisify(execFile);
+
+const DEV_NULL = os.platform() === 'win32' ? 'NUL' : '/dev/null';
 
 /**
  * Utilitaires Git partagés entre les routes terminals et git.
@@ -13,6 +16,17 @@ async function runGit(args, cwd) {
   } catch (err) {
     if (err.stdout !== undefined) return err.stdout;
     throw err;
+  }
+}
+
+// Variante stricte : throw si exit code != 0, expose stderr dans l'erreur
+async function runGitStrict(args, cwd) {
+  try {
+    const { stdout } = await execFileAsync('git', args, { cwd, maxBuffer: 10 * 1024 * 1024 });
+    return stdout;
+  } catch (err) {
+    const msg = (err.stderr || err.stdout || err.message || 'Erreur git inconnue').trim();
+    throw new Error(msg);
   }
 }
 
@@ -51,11 +65,7 @@ async function getFullDiff(directory) {
     try {
       if (f.status === 'untracked') {
         // NUL (Windows) et /dev/null (Unix) pour diff --no-index
-        try {
-          f.diff = await runGit(['diff', '--no-index', 'NUL', f.path], directory);
-        } catch {
-          f.diff = await runGit(['show', `:${f.path}`], directory).catch(() => '');
-        }
+        f.diff = await runGit(['diff', '--no-index', DEV_NULL, f.path], directory).catch(() => '');
       } else {
         f.diff = await runGit(['diff', 'HEAD', '--', f.path], directory);
         if (!f.diff) f.diff = await runGit(['diff', '--cached', '--', f.path], directory);
@@ -79,4 +89,4 @@ async function getFullDiff(directory) {
   return { files, summary, combinedDiff, recentCommits, currentBranch };
 }
 
-module.exports = { runGit, parseGitStatus, getFullDiff };
+module.exports = { runGit, runGitStrict, parseGitStatus, getFullDiff };

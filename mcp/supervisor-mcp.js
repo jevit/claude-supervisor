@@ -245,8 +245,13 @@ const TOOLS = [
   },
   {
     name: 'supervisor_get_context',
-    description: 'Recupere le contexte partage entre toutes les sessions (decisions, conventions, decouvertes).',
-    inputSchema: { type: 'object', properties: {} },
+    description: 'Recupere le contexte partage. Si key est fourni, retourne uniquement cette entree. Supporte le prefixe wildcard (ex: "squad:result:" retourne toutes les entrees commencant par ce prefixe).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        key: { type: 'string', description: 'Cle exacte ou prefixe (terminer par ":" pour un prefixe)' },
+      },
+    },
   },
   {
     name: 'supervisor_set_context',
@@ -406,6 +411,14 @@ async function handleToolCall(name, args) {
     case 'supervisor_get_context': {
       const ctx = await apiCall('GET', '/api/context');
       if (!ctx || ctx.length === 0) return 'Aucun contexte partage.';
+      if (args.key) {
+        const isPrefix = args.key.endsWith(':');
+        const filtered = isPrefix
+          ? ctx.filter((e) => e.key.startsWith(args.key))
+          : ctx.filter((e) => e.key === args.key);
+        if (filtered.length === 0) return `Aucune entree pour la cle "${args.key}".`;
+        return JSON.stringify(isPrefix ? filtered : filtered[0], null, 2);
+      }
       return JSON.stringify(ctx, null, 2);
     }
 

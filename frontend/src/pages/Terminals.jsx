@@ -5,6 +5,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { SearchAddon } from '@xterm/addon-search';
 import 'xterm/css/xterm.css';
 import GitDiffPanel from '../components/GitDiffPanel';
+import ComboBox, { useComboHistory } from '../components/ComboBox';
 
 // Layouts disponibles en mode grille
 const LAYOUTS = [
@@ -37,6 +38,21 @@ function TerminalView({ terminalId, terminalName, terminalDirectory, terminalSta
   const [activeTab,         setActiveTab]         = useState('terminal'); // 'terminal' | 'diff'
   const [diffEverOpened,    setDiffEverOpened]    = useState(false);
   const [replaying,         setReplaying]         = useState(false);
+  const [diffFileCount,     setDiffFileCount]     = useState(0); // badge sur l'onglet diff
+
+  // Vérifier le nb de fichiers modifiés pour le badge diff (toutes les 15s)
+  useEffect(() => {
+    if (!terminalId || isGhost) return;
+    const check = async () => {
+      try {
+        const res = await fetch(`/api/terminals/${terminalId}/diff`);
+        if (res.ok) { const d = await res.json(); setDiffFileCount(d.files?.length || 0); }
+      } catch {}
+    };
+    check();
+    const t = setInterval(check, 15000);
+    return () => clearInterval(t);
+  }, [terminalId, isGhost]);
 
   const switchTab = (tab) => {
     if (tab === 'diff') setDiffEverOpened(true);
@@ -319,7 +335,7 @@ function TerminalView({ terminalId, terminalName, terminalDirectory, terminalSta
         <div style={{ display: 'flex', flexShrink: 0, border: '1px solid #2a2b3d', borderRadius: 5, overflow: 'hidden' }}>
           {[
             { id: 'terminal', label: compact ? '>_' : '>_ Terminal' },
-            { id: 'diff',     label: compact ? '⎇'  : '⎇ Git Diff'  },
+            { id: 'diff',     label: compact ? '⎇'  : '⎇ Git Diff', count: diffFileCount },
           ].map((tab) => (
             <button key={tab.id} onClick={() => switchTab(tab.id)} style={{
               background: activeTab === tab.id ? 'rgba(139,92,246,0.2)' : 'transparent',
@@ -332,8 +348,19 @@ function TerminalView({ terminalId, terminalName, terminalDirectory, terminalSta
               fontSize: compact ? 10 : 11,
               fontFamily: 'monospace', fontWeight: activeTab === tab.id ? 700 : 400,
               transition: 'background 0.15s, color 0.15s',
+              display: 'flex', alignItems: 'center', gap: 5,
             }}>
               {tab.label}
+              {tab.count > 0 && (
+                <span style={{
+                  background: activeTab === tab.id ? '#8b5cf6' : 'rgba(139,92,246,0.5)',
+                  color: 'white', borderRadius: 8,
+                  fontSize: 9, fontWeight: 700, fontFamily: 'sans-serif',
+                  padding: '1px 5px', lineHeight: 1.4,
+                }}>
+                  {tab.count}
+                </span>
+              )}
             </button>
           ))}
         </div>
@@ -493,9 +520,10 @@ export default function Terminals() {
   }, [searchParams, setSearchParams]);
 
   // Formulaire de lancement — répertoire pré-rempli avec le dernier utilisé
-  const [directory, setDirectory]         = useState(() => {
-    try { const h = JSON.parse(localStorage.getItem('cs:dir-history') || '[]'); return h[0] || ''; } catch { return ''; }
-  });
+  const dirComboHistory  = useComboHistory('cs:dir-history');
+  const nameComboHistory = useComboHistory('cs:name-history');
+
+  const [directory, setDirectory]         = useState(() => dirComboHistory.history[0] || '');
   const [name, setName]                   = useState('');
   const [prompt, setPrompt]               = useState('');
   const [model, setModel]                 = useState('');
@@ -503,56 +531,6 @@ export default function Terminals() {
   const [injectContext, setInjectContext] = useState(true);
   const [contextCount, setContextCount]   = useState(0);
   const [showAdvanced, setShowAdvanced]   = useState(false);
-
-  // Historique des répertoires (localStorage)
-  const [dirHistory, setDirHistory] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('cs:dir-history') || '[]'); } catch { return []; }
-  });
-  const [dirDropOpen, setDirDropOpen] = useState(false);
-  const dirComboRef = useRef(null);
-
-  const saveDirToHistory = (dir) => {
-    if (!dir.trim()) return;
-    const next = [dir.trim(), ...dirHistory.filter((d) => d !== dir.trim())].slice(0, 15);
-    setDirHistory(next);
-    localStorage.setItem('cs:dir-history', JSON.stringify(next));
-  };
-
-  const removeDirFromHistory = (dir) => {
-    const next = dirHistory.filter((d) => d !== dir);
-    setDirHistory(next);
-    localStorage.setItem('cs:dir-history', JSON.stringify(next));
-  };
-
-  // Historique des noms (localStorage)
-  const [nameHistory, setNameHistory] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('cs:name-history') || '[]'); } catch { return []; }
-  });
-  const [nameDropOpen, setNameDropOpen] = useState(false);
-  const nameComboRef = useRef(null);
-
-  const saveNameToHistory = (n) => {
-    if (!n.trim()) return;
-    const next = [n.trim(), ...nameHistory.filter((x) => x !== n.trim())].slice(0, 15);
-    setNameHistory(next);
-    localStorage.setItem('cs:name-history', JSON.stringify(next));
-  };
-
-  const removeNameFromHistory = (n) => {
-    const next = nameHistory.filter((x) => x !== n);
-    setNameHistory(next);
-    localStorage.setItem('cs:name-history', JSON.stringify(next));
-  };
-
-  // Fermer les dropdowns si clic en dehors
-  useEffect(() => {
-    const handler = (e) => {
-      if (dirComboRef.current && !dirComboRef.current.contains(e.target)) setDirDropOpen(false);
-      if (nameComboRef.current && !nameComboRef.current.contains(e.target)) setNameDropOpen(false);
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, []);
 
   // Charger le nombre d'entrees de contexte partagé pour affichage dans le formulaire
   useEffect(() => {
@@ -602,8 +580,8 @@ export default function Terminals() {
         } else {
           setActiveTerminal(data.terminalId);
         }
-        if (directory.trim()) saveDirToHistory(directory.trim());
-        if (name.trim()) saveNameToHistory(name.trim());
+        if (directory.trim()) dirComboHistory.save(directory.trim());
+        if (name.trim()) nameComboHistory.save(name.trim());
         setDirectory(''); setName(''); setPrompt('');
         fetchTerminals();
       }
@@ -754,59 +732,14 @@ export default function Terminals() {
                 <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#565f89', marginBottom: 5, letterSpacing: '0.3px', textTransform: 'uppercase' }}>
                   📁 Répertoire
                 </label>
-                <div ref={dirComboRef} style={{ position: 'relative' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', position: 'relative' }}>
-                    <input
-                      placeholder="C:/mon-projet"
-                      value={directory}
-                      onChange={(e) => { setDirectory(e.target.value); setDirDropOpen(true); }}
-                      onFocus={() => dirHistory.length > 0 && setDirDropOpen(true)}
-                      className="form-input"
-                      style={{ paddingRight: dirHistory.length > 0 ? 26 : undefined, fontFamily: 'monospace', fontSize: 12 }}
-                    />
-                    {dirHistory.length > 0 && (
-                      <button type="button" onClick={() => setDirDropOpen((v) => !v)} style={{
-                        position: 'absolute', right: 6, background: 'none', border: 'none',
-                        color: '#565f89', cursor: 'pointer', padding: '0 2px', fontSize: 10, lineHeight: 1,
-                      }}>
-                        {dirDropOpen ? '▲' : '▼'}
-                      </button>
-                    )}
-                  </div>
-                  {dirDropOpen && dirHistory.length > 0 && (() => {
-                    const q = directory.toLowerCase();
-                    const filtered = dirHistory.filter((d) => !q || d.toLowerCase().includes(q));
-                    if (!filtered.length) return null;
-                    return (
-                      <div style={{
-                        position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 100,
-                        background: '#1f2335', border: '1px solid #3b4261', borderRadius: 6,
-                        boxShadow: '0 8px 24px rgba(0,0,0,0.5)', marginTop: 2,
-                        maxHeight: 200, overflowY: 'auto',
-                      }}>
-                        {filtered.map((d) => (
-                          <div key={d} style={{ display: 'flex', alignItems: 'center', borderBottom: '1px solid #2a2b3d' }}>
-                            <button type="button" onClick={() => { setDirectory(d); setDirDropOpen(false); }}
-                              style={{
-                                flex: 1, background: 'none', border: 'none', color: '#c0caf5',
-                                cursor: 'pointer', padding: '7px 10px', textAlign: 'left',
-                                fontSize: 11, fontFamily: 'monospace',
-                                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                              }}
-                              title={d}
-                            >
-                              <span style={{ color: '#565f89', marginRight: 5 }}>📁</span>{d}
-                            </button>
-                            <button type="button" onClick={(e) => { e.stopPropagation(); removeDirFromHistory(d); }}
-                              style={{ background: 'none', border: 'none', color: '#565f89', cursor: 'pointer', padding: '7px 8px', fontSize: 11, flexShrink: 0 }}
-                              title="Retirer de l'historique"
-                            >×</button>
-                          </div>
-                        ))}
-                      </div>
-                    );
-                  })()}
-                </div>
+                <ComboBox
+                  value={directory}
+                  onChange={setDirectory}
+                  placeholder="C:/mon-projet"
+                  storageKey="cs:dir-history"
+                  itemIcon="📁"
+                  inputStyle={{ fontFamily: 'monospace', fontSize: 12 }}
+                />
               </div>
 
               {/* Nom — combobox avec historique */}
@@ -814,57 +747,13 @@ export default function Terminals() {
                 <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#565f89', marginBottom: 5, letterSpacing: '0.3px', textTransform: 'uppercase' }}>
                   ✏ Nom <span style={{ fontWeight: 400, textTransform: 'none', fontSize: 10 }}>(optionnel)</span>
                 </label>
-                <div ref={nameComboRef} style={{ position: 'relative' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', position: 'relative' }}>
-                    <input
-                      placeholder="ex: Backend auth"
-                      value={name}
-                      onChange={(e) => { setName(e.target.value); setNameDropOpen(true); }}
-                      onFocus={() => nameHistory.length > 0 && setNameDropOpen(true)}
-                      className="form-input"
-                      style={{ fontSize: 12, paddingRight: nameHistory.length > 0 ? 26 : undefined }}
-                    />
-                    {nameHistory.length > 0 && (
-                      <button type="button" onClick={() => setNameDropOpen((v) => !v)} style={{
-                        position: 'absolute', right: 6, background: 'none', border: 'none',
-                        color: '#565f89', cursor: 'pointer', padding: '0 2px', fontSize: 10, lineHeight: 1,
-                      }}>
-                        {nameDropOpen ? '▲' : '▼'}
-                      </button>
-                    )}
-                  </div>
-                  {nameDropOpen && nameHistory.length > 0 && (() => {
-                    const q = name.toLowerCase();
-                    const filtered = nameHistory.filter((n) => !q || n.toLowerCase().includes(q));
-                    if (!filtered.length) return null;
-                    return (
-                      <div style={{
-                        position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 100,
-                        background: '#1f2335', border: '1px solid #3b4261', borderRadius: 6,
-                        boxShadow: '0 8px 24px rgba(0,0,0,0.5)', marginTop: 2,
-                        maxHeight: 180, overflowY: 'auto',
-                      }}>
-                        {filtered.map((n) => (
-                          <div key={n} style={{ display: 'flex', alignItems: 'center', borderBottom: '1px solid #2a2b3d' }}>
-                            <button type="button" onClick={() => { setName(n); setNameDropOpen(false); }}
-                              style={{
-                                flex: 1, background: 'none', border: 'none', color: '#c0caf5',
-                                cursor: 'pointer', padding: '7px 10px', textAlign: 'left',
-                                fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                              }}
-                            >
-                              {n}
-                            </button>
-                            <button type="button" onClick={(e) => { e.stopPropagation(); removeNameFromHistory(n); }}
-                              style={{ background: 'none', border: 'none', color: '#565f89', cursor: 'pointer', padding: '7px 8px', fontSize: 11, flexShrink: 0 }}
-                              title="Retirer de l'historique"
-                            >×</button>
-                          </div>
-                        ))}
-                      </div>
-                    );
-                  })()}
-                </div>
+                <ComboBox
+                  value={name}
+                  onChange={setName}
+                  placeholder="ex: Backend auth"
+                  storageKey="cs:name-history"
+                  inputStyle={{ fontSize: 12 }}
+                />
               </div>
 
               {/* Prompt */}
@@ -1037,6 +926,15 @@ export default function Terminals() {
                   const gridIndex  = gridTerminals.indexOf(t.id);
                   const isGhostT   = t.status === 'ghost';
                   const statusColor = t.status === 'running' ? '#22c55e' : isGhostT ? '#f59e0b' : '#ef4444';
+                  // Durée depuis le démarrage
+                  const elapsed = (() => {
+                    const since = t.startedAt || t.createdAt;
+                    if (!since) return null;
+                    const s = Math.floor((Date.now() - new Date(since)) / 1000);
+                    if (s < 60) return `${s}s`;
+                    if (s < 3600) return `${Math.floor(s/60)}m`;
+                    return `${Math.floor(s/3600)}h${Math.floor((s%3600)/60).toString().padStart(2,'0')}`;
+                  })();
 
                   return (
                     <div
@@ -1044,6 +942,7 @@ export default function Terminals() {
                       className="card terminal-card"
                       style={{
                         padding: '8px 10px',
+                        backgroundImage: isGhostT ? 'repeating-linear-gradient(135deg, transparent, transparent 6px, rgba(245,158,11,0.04) 6px, rgba(245,158,11,0.04) 12px)' : undefined,
                         cursor: 'pointer',
                         border: isActive || inGrid ? '2px solid var(--accent)' : '1px solid var(--border)',
                         borderLeft: `3px solid ${statusColor}`,

@@ -73,6 +73,7 @@ class TerminalManager {
       claudeArgs.push('--dangerously-skip-permissions');
     }
     if (options.model) {
+      if (!/^[a-zA-Z0-9._-]+$/.test(options.model)) throw new Error('Nom de modele invalide');
       claudeArgs.push('--model', options.model);
     }
     // Passer le prompt via variable d'environnement pour eviter toute injection shell
@@ -406,7 +407,10 @@ class TerminalManager {
 
     const claudeArgs = ['claude'];
     if (ghost.dangerousMode) claudeArgs.push('--dangerously-skip-permissions');
-    if (ghost.model) claudeArgs.push('--model', ghost.model);
+    if (ghost.model) {
+      if (!/^[a-zA-Z0-9._-]+$/.test(ghost.model)) throw new Error('Nom de modele invalide');
+      claudeArgs.push('--model', ghost.model);
+    }
     if (effectivePrompt) claudeArgs.push(isWindows ? '%CLAUDE_INITIAL_PROMPT%' : '"$CLAUDE_INITIAL_PROMPT"');
     const shellArgs = isWindows ? ['/k', claudeArgs.join(' ')] : ['-c', claudeArgs.join(' ')];
 
@@ -463,7 +467,12 @@ class TerminalManager {
       this.persistState();
     });
 
-    this.tracker.registerSession(terminalId, { name, directory: cwd, status: 'active' });
+    // Restaurer la session sans ecraser l'historique existant
+    if (!this.tracker.getSession(terminalId)) {
+      this.tracker.registerSession(terminalId, { name, directory: cwd, status: 'active' });
+    } else {
+      this.tracker.updateSession(terminalId, { status: 'active' });
+    }
     this.broadcast('terminal:resumed', { terminalId, name, directory: cwd, pid: term.pid });
     this.persistState();
 

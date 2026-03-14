@@ -289,9 +289,12 @@ export default function GitDiffPanel({ directory, terminalId, onClose }) {
   const [commitMsg, setCommitMsg]     = useState('');
   const [committing, setCommitting]   = useState(false);
   const [commitResult, setCommitResult] = useState(null); // 'ok' | 'error'
+  const [pushing, setPushing]         = useState(false);
+  const [pushResult, setPushResult]   = useState(null);   // 'ok' | 'error'
   const [stageAllBusy, setStageAllBusy] = useState(false);
   const [confirmDiscard, setConfirmDiscard] = useState(null); // filepath en attente
   const [opError, setOpError]           = useState(null);   // erreur git operation
+  const [resolvedDir, setResolvedDir]   = useState(directory); // répertoire résolu (peut venir du terminal)
 
   const showOpError = (msg) => {
     setOpError(msg);
@@ -331,6 +334,7 @@ export default function GitDiffPanel({ directory, terminalId, onClose }) {
         setData(null);
       } else {
         setData(json);
+        if (json.directory) setResolvedDir(json.directory);
         if (json.files?.length > 0 && !selectedFile) setSelectedFile(json.files[0].path);
       }
     } catch (err) {
@@ -340,21 +344,24 @@ export default function GitDiffPanel({ directory, terminalId, onClose }) {
   }, [terminalId, directory]);
 
   const gitOp = useCallback(async (action, body = {}) => {
+    if (!resolvedDir) { showOpError('Répertoire non résolu — réouvrez le panneau'); return false; }
     try {
       const res = await fetch(`/api/git/${action}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ directory, ...body }),
+        body: JSON.stringify({ directory: resolvedDir, ...body }),
       });
       if (!res.ok) {
-        const j = await res.json().catch(() => ({}));
-        showOpError(j.error || `Erreur git ${action}`);
+        const text = await res.text().catch(() => '');
+        let msg;
+        try { msg = JSON.parse(text).error; } catch {}
+        showOpError(msg || text.slice(0, 120) || `Erreur HTTP ${res.status} (git ${action})`);
         return false;
       }
-    } catch (e) { showOpError(e.message); return false; }
+    } catch (e) { showOpError(e.message || 'Erreur réseau'); return false; }
     await fetchDiff();
     return true;
-  }, [directory, fetchDiff]);
+  }, [resolvedDir, fetchDiff]);
 
   const handleStageAll = async () => {
     setStageAllBusy(true);
@@ -374,7 +381,7 @@ export default function GitDiffPanel({ directory, terminalId, onClose }) {
       const res = await fetch('/api/git/commit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ directory, message: commitMsg.trim() }),
+        body: JSON.stringify({ directory: resolvedDir, message: commitMsg.trim() }),
       });
       if (res.ok) {
         setCommitResult('ok');
@@ -535,7 +542,7 @@ export default function GitDiffPanel({ directory, terminalId, onClose }) {
                         selectedFile={selectedFile}
                         onSelect={setSelectedFile}
                         depth={0}
-                        fileActionProps={{ directory, onDone: fetchDiff, onError: showOpError, confirmDiscard, onConfirmDiscard: setConfirmDiscard }}
+                        fileActionProps={{ directory: resolvedDir, onDone: fetchDiff, onError: showOpError, confirmDiscard, onConfirmDiscard: setConfirmDiscard }}
                       />
                     </>
                   )}
@@ -552,7 +559,7 @@ export default function GitDiffPanel({ directory, terminalId, onClose }) {
                       >
                         <span className="gdp-file-status" style={{ color, background: color + '20' }}>{letter}</span>
                         <span className="gdp-file-name" style={{ flex: 1 }}>{f.path.split(/[/\\]/).pop()}</span>
-                        <FileActions file={f} directory={directory} onDone={fetchDiff} onError={showOpError}
+                        <FileActions file={f} directory={resolvedDir} onDone={fetchDiff} onError={showOpError}
                           confirmDiscard={confirmDiscard} onConfirmDiscard={setConfirmDiscard} />
                       </div>
                     );
@@ -609,8 +616,8 @@ export default function GitDiffPanel({ directory, terminalId, onClose }) {
                 )}
                 {/* Stage All (raccourci explicite si rien n'est stagé) */}
                 {hasUnstagedFiles && hasStagedFiles && (
-                  <button className="gdp-commit-action-btn" disabled={stageAllBusy} onClick={handleStageAll}
-                    style={{ background: 'rgba(16,185,129,0.08)', color: '#10b981', border: '1px solid rgba(16,185,129,0.25)' }}>
+                  <button type="button" className="gdp-commit-action-btn" disabled={stageAllBusy} onClick={handleStageAll}
+                    style={{ width: '100%', background: 'rgba(16,185,129,0.08)', color: '#10b981', border: '1px solid rgba(16,185,129,0.25)' }}>
                     {stageAllBusy ? '…' : '+ Stage all'}
                   </button>
                 )}
@@ -622,23 +629,56 @@ export default function GitDiffPanel({ directory, terminalId, onClose }) {
                   onChange={(e) => setCommitMsg(e.target.value)}
                   onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleCommit(); } }}
                 />
-                {/* Bouton commit — adaptatif selon l'état de staging */}
-                <button
-                  className="gdp-commit-action-btn"
-                  disabled={!commitMsg.trim() || committing}
-                  onClick={handleCommit}
-                  title={!hasStagedFiles ? 'Stagera automatiquement tous les fichiers avant de commiter' : undefined}
-                  style={{
-                    background: commitMsg.trim() ? 'rgba(139,92,246,0.2)' : 'rgba(255,255,255,0.04)',
-                    color: commitMsg.trim() ? '#8b5cf6' : '#565f89',
-                    border: `1px solid ${commitMsg.trim() ? 'rgba(139,92,246,0.4)' : 'transparent'}`,
-                  }}>
-                  {committing ? '…'
-                    : commitResult === 'ok' ? '✓ Commité'
-                    : commitResult === 'error' ? '✗ Erreur'
-                    : hasStagedFiles ? '⎇ Commit'
-                    : '⎇ Stage all & Commit'}
-                </button>
+                {/* Ligne commit + push */}
+                <div style={{ display: 'flex', gap: 5 }}>
+                  {/* Bouton commit — adaptatif selon l'état de staging */}
+                  <button
+                    type="button"
+                    className="gdp-commit-action-btn"
+                    disabled={!commitMsg.trim() || committing}
+                    onClick={handleCommit}
+                    title={!hasStagedFiles ? 'Stagera automatiquement tous les fichiers avant de commiter' : undefined}
+                    style={{
+                      flex: 1,
+                      background: commitMsg.trim() ? 'rgba(139,92,246,0.2)' : 'rgba(255,255,255,0.04)',
+                      color: commitMsg.trim() ? '#8b5cf6' : '#565f89',
+                      border: `1px solid ${commitMsg.trim() ? 'rgba(139,92,246,0.4)' : 'transparent'}`,
+                    }}>
+                    {committing ? '…'
+                      : commitResult === 'ok' ? '✓ Commité'
+                      : commitResult === 'error' ? '✗ Erreur'
+                      : hasStagedFiles ? '⎇ Commit'
+                      : '⎇ Stage & Commit'}
+                  </button>
+                  {/* Bouton push */}
+                  <button
+                    type="button"
+                    className="gdp-commit-action-btn"
+                    disabled={pushing}
+                    onClick={async () => {
+                      setPushing(true);
+                      try {
+                        const res = await fetch('/api/git/push', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ directory: resolvedDir }),
+                        });
+                        if (res.ok) { setPushResult('ok'); }
+                        else { const j = await res.json().catch(() => ({})); showOpError(j.error || 'Erreur push'); setPushResult('error'); }
+                      } catch (e) { showOpError(e.message); setPushResult('error'); }
+                      setTimeout(() => setPushResult(null), 3000);
+                      setPushing(false);
+                    }}
+                    title="git push"
+                    style={{
+                      flexShrink: 0,
+                      background: 'rgba(56,189,248,0.1)',
+                      color: pushResult === 'ok' ? '#10b981' : pushResult === 'error' ? '#ef4444' : '#38bdf8',
+                      border: '1px solid rgba(56,189,248,0.3)',
+                    }}>
+                    {pushing ? '…' : pushResult === 'ok' ? '✓' : pushResult === 'error' ? '✗' : '↑ Push'}
+                  </button>
+                </div>
               </div>
             )}
             </div>{/* fin gdp-left-col */}
@@ -793,7 +833,7 @@ export default function GitDiffPanel({ directory, terminalId, onClose }) {
         .gdp-commit-input { background: #1a1b26; border: 1px solid #2d3148; border-radius: 5px; color: #c0caf5; font-size: 11px; padding: 5px 8px; font-family: monospace; outline: none; width: 100%; box-sizing: border-box; }
         .gdp-commit-input:focus { border-color: rgba(139,92,246,0.5); }
         .gdp-commit-input:disabled { opacity: 0.4; cursor: not-allowed; }
-        .gdp-commit-action-btn { border-radius: 5px; padding: 4px 8px; font-size: 11px; font-weight: 600; cursor: pointer; border: none; width: 100%; text-align: center; transition: opacity 0.15s; }
+        .gdp-commit-action-btn { border-radius: 5px; padding: 4px 8px; font-size: 11px; font-weight: 600; cursor: pointer; border: none; text-align: center; transition: opacity 0.15s; }
         .gdp-commit-action-btn:disabled { opacity: 0.4; cursor: not-allowed; }
         .gdp-list-section-title { padding: 6px 10px 4px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #565f89; background: rgba(255,255,255,0.02); border-bottom: 1px solid rgba(45,49,72,0.5); }
         .gdp-file-item { display: flex; align-items: center; gap: 8px; padding: 6px 10px; cursor: pointer; border-bottom: 1px solid rgba(45,49,72,0.5); transition: background 0.1s; overflow: hidden; }

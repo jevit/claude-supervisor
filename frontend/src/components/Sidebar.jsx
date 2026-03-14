@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { NavLink } from 'react-router-dom';
 
 const NAV_ITEMS = [
-  { to: '/orchestrator', label: '🎼 Orchestrateur', icon: '🎼' },
+  { to: '/orchestrator', label: 'Orchestrateur', icon: '🎼' },
   { to: '/terminals',    label: 'Terminaux',        icon: '>_' },
   { to: '/conflicts',    label: 'Conflits & Locks', icon: '⚠', conflictBadge: true },
   { to: '/context',      label: 'Contexte Partage', icon: '📋' },
