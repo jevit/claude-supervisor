@@ -22,10 +22,12 @@ const { EnvWatcher } = require('./services/env-watcher');
 const { GitOrchestrator } = require('./services/git-orchestrator');
 const { ApprovalRules } = require('./services/approval-rules');
 const { SquadManager } = require('./services/squad-manager');
+const { SquadTemplates } = require('./services/squad-templates');
 const { TerminalManager } = require('./services/terminal-manager');
 const { WorktreeManager } = require('./services/worktree-manager');
 const terminalRoutes = require('./routes/terminals');
 const squadRoutes = require('./routes/squads');
+const squadTemplateRoutes = require('./routes/squad-templates');
 const timelineRoutes = require('./routes/timeline');
 const lockRoutes = require('./routes/locks');
 const messageRoutes = require('./routes/messages');
@@ -114,7 +116,8 @@ const worktreeManager = new WorktreeManager(repoRoot, worktreesDir);
 console.log(`WorktreeManager: repo=${repoRoot}, worktrees=${worktreesDir}`);
 
 // Initialiser le squad manager
-const squadManager = new SquadManager(terminalManager, sharedContext, messageBus, broadcast, store, worktreeManager);
+const squadManager   = new SquadManager(terminalManager, sharedContext, messageBus, broadcast, store, worktreeManager);
+const squadTemplates = new SquadTemplates(store);
 
 // Initialiser le protocole WebSocket
 const wsProtocol = new WsProtocol(wss, tracker, broadcast, { lockManager, messageBus, approvalRules });
@@ -135,6 +138,7 @@ app.locals.gitOrchestrator = gitOrchestrator;
 app.locals.approvalRules = approvalRules;
 app.locals.terminalManager  = terminalManager;
 app.locals.squadManager     = squadManager;
+app.locals.squadTemplates   = squadTemplates;
 app.locals.worktreeManager  = worktreeManager;
 
 // REST API routes
@@ -150,6 +154,7 @@ app.use('/api/env', envRoutes);
 app.use('/api/git', gitRoutes);
 app.use('/api/terminals', terminalRoutes);
 app.use('/api/squads', squadRoutes);
+app.use('/api/squad-templates', squadTemplateRoutes);
 
 app.get('/api/health', (req, res) => {
   res.json({

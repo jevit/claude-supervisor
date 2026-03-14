@@ -1,0 +1,28 @@
+const express = require('express');
+const router  = express.Router();
+
+// Lister tous les templates
+router.get('/', (req, res) => {
+  const squadTemplates = req.app.locals.squadTemplates;
+  res.json(squadTemplates.getAll());
+});
+
+// Sauvegarder un template
+router.post('/', (req, res) => {
+  const squadTemplates = req.app.locals.squadTemplates;
+  const { name, config } = req.body;
+  if (!name || !config) return res.status(400).json({ error: 'name et config sont requis' });
+  const tpl = squadTemplates.save({ name, config });
+  if (!tpl) return res.status(400).json({ error: 'Données invalides' });
+  res.status(201).json(tpl);
+});
+
+// Supprimer un template
+router.delete('/:id', (req, res) => {
+  const squadTemplates = req.app.locals.squadTemplates;
+  const ok = squadTemplates.remove(req.params.id);
+  if (!ok) return res.status(404).json({ error: 'Template introuvable' });
+  res.json({ removed: true });
+});
+
+module.exports = router;

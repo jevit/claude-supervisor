@@ -2,18 +2,119 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useWebSocket } from '../services/websocket';
 
-function SquadForm({ onCreated }) {
-  const [name, setName] = useState('');
-  const [goal, setGoal] = useState('');
-  const [directory, setDirectory] = useState('');
-  const [model, setModel] = useState('');
-  const [tasks, setTasks] = useState([
-    { name: 'Agent 1', task: '', dependsOn: [] },
-    { name: 'Agent 2', task: '', dependsOn: [] },
-  ]);
+/* ────────────────────────────────────────────────────────────────── */
+/*  Panel templates                                                   */
+/* ────────────────────────────────────────────────────────────────── */
+
+function TemplatesPanel({ onLoad }) {
+  const [templates, setTemplates] = useState([]);
+  const [open,      setOpen]      = useState(false);
+  const [deleting,  setDeleting]  = useState(null);
+
+  const fetchTemplates = useCallback(() => {
+    fetch('/api/squad-templates')
+      .then((r) => r.json())
+      .then((data) => setTemplates(Array.isArray(data) ? data : []))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => { fetchTemplates(); }, [fetchTemplates]);
+
+  const handleDelete = async (id) => {
+    setDeleting(id);
+    await fetch(`/api/squad-templates/${id}`, { method: 'DELETE' });
+    setDeleting(null);
+    fetchTemplates();
+  };
+
+  if (templates.length === 0) return null;
+
+  return (
+    <div className="tpl-panel card" style={{ marginBottom: 16 }}>
+      <button className="tpl-toggle" onClick={() => setOpen((v) => !v)}>
+        <span>📋 Templates enregistrés ({templates.length})</span>
+        <span>{open ? '▲' : '▼'}</span>
+      </button>
+
+      {open && (
+        <div className="tpl-grid">
+          {templates.map((t) => (
+            <div key={t.id} className="tpl-card">
+              <div className="tpl-card-header">
+                <span className="tpl-card-name">{t.name}</span>
+                <button
+                  className="tpl-del-btn"
+                  onClick={() => handleDelete(t.id)}
+                  disabled={deleting === t.id}
+                  title="Supprimer ce template"
+                >
+                  {deleting === t.id ? '…' : '✕'}
+                </button>
+              </div>
+              <p className="tpl-card-goal">{t.config.goal}</p>
+              <div className="tpl-card-meta">
+                <span>{t.config.tasks.length} agent{t.config.tasks.length > 1 ? 's' : ''}</span>
+                {t.config.model && <span>{t.config.model}</span>}
+                {t.config.useWorktrees && <span>worktrees</span>}
+              </div>
+              <div className="tpl-card-tasks">
+                {t.config.tasks.slice(0, 3).map((task, i) => (
+                  <span key={i} className="tpl-task-chip">{task.name}</span>
+                ))}
+                {t.config.tasks.length > 3 && (
+                  <span className="tpl-task-chip tpl-task-more">+{t.config.tasks.length - 3}</span>
+                )}
+              </div>
+              <button className="tpl-load-btn" onClick={() => { onLoad(t.config); setOpen(false); }}>
+                ↗ Charger
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ────────────────────────────────────────────────────────────────── */
+/*  Formulaire de création de squad                                   */
+/* ────────────────────────────────────────────────────────────────── */
+
+const BLANK_TASKS = [
+  { name: 'Agent 1', task: '', dependsOn: [] },
+  { name: 'Agent 2', task: '', dependsOn: [] },
+];
+
+function SquadForm({ initialConfig, onCreated, onTemplateRefresh }) {
+  const [name,         setName]         = useState('');
+  const [goal,         setGoal]         = useState('');
+  const [directory,    setDirectory]    = useState('');
+  const [model,        setModel]        = useState('');
+  const [tasks,        setTasks]        = useState(BLANK_TASKS);
   const [useWorktrees, setUseWorktrees] = useState(false);
-  const [launching, setLaunching] = useState(false);
-  const [error, setError] = useState('');
+  const [launching,    setLaunching]    = useState(false);
+  const [error,        setError]        = useState('');
+
+  // Nom du template à sauvegarder
+  const [tplName,      setTplName]      = useState('');
+  const [saving,       setSaving]       = useState(false);
+  const [saveFeedback, setSaveFeedback] = useState('');
+
+  // Charger un template dans le formulaire
+  useEffect(() => {
+    if (!initialConfig) return;
+    setName(initialConfig.name        || '');
+    setGoal(initialConfig.goal        || '');
+    setDirectory(initialConfig.directory || '');
+    setModel(initialConfig.model      || '');
+    setUseWorktrees(initialConfig.useWorktrees ?? false);
+    setTasks(
+      initialConfig.tasks?.length
+        ? initialConfig.tasks.map((t) => ({ name: t.name || '', task: t.task || '', dependsOn: t.dependsOn || [] }))
+        : BLANK_TASKS
+    );
+    setTplName('');
+  }, [initialConfig]);
 
   function addTask() {
     setTasks([...tasks, { name: `Agent ${tasks.length + 1}`, task: '', dependsOn: [] }]);
@@ -56,11 +157,45 @@ function SquadForm({ onCreated }) {
       onCreated(data);
       setName('');
       setGoal('');
-      setTasks([{ name: 'Agent 1', task: '' }, { name: 'Agent 2', task: '' }]);
+      setTasks(BLANK_TASKS);
     } catch (err) {
       setError(err.message);
     }
     setLaunching(false);
+  }
+
+  async function handleSaveTemplate() {
+    const templateName = tplName.trim() || name.trim();
+    if (!templateName) return;
+    setSaving(true);
+    try {
+      await fetch('/api/squad-templates', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: templateName,
+          config: {
+            name: name.trim(),
+            goal: goal.trim(),
+            directory: directory.trim(),
+            model,
+            useWorktrees,
+            tasks: tasks.filter((t) => t.name || t.task).map((t) => ({
+              name: t.name,
+              task: t.task,
+              dependsOn: t.dependsOn || [],
+            })),
+          },
+        }),
+      });
+      setSaveFeedback(`✓ Template "${templateName}" enregistré`);
+      setTplName('');
+      onTemplateRefresh?.();
+      setTimeout(() => setSaveFeedback(''), 3000);
+    } catch {
+      setSaveFeedback('Erreur lors de la sauvegarde');
+    }
+    setSaving(false);
   }
 
   return (
@@ -74,14 +209,14 @@ function SquadForm({ onCreated }) {
               onChange={(e) => setName(e.target.value)} required />
           </label>
           <label className="squad-label">
-            Repertoire
+            Répertoire
             <input className="squad-input" placeholder="C:/Perso/Workspace3/mon-projet" value={directory}
               onChange={(e) => setDirectory(e.target.value)} />
           </label>
           <label className="squad-label" style={{ maxWidth: 160 }}>
-            Modele
+            Modèle
             <select className="squad-input" value={model} onChange={(e) => setModel(e.target.value)}>
-              <option value="">Par defaut</option>
+              <option value="">Par défaut</option>
               <option value="sonnet">Sonnet</option>
               <option value="opus">Opus</option>
               <option value="haiku">Haiku</option>
@@ -91,21 +226,20 @@ function SquadForm({ onCreated }) {
         <label className="squad-label">
           Objectif global
           <textarea className="squad-input squad-textarea" rows={2}
-            placeholder="Decrire la mission globale du squad..."
+            placeholder="Décrire la mission globale du squad..."
             value={goal} onChange={(e) => setGoal(e.target.value)} required />
         </label>
-        <label className="squad-wt-label" title="Chaque agent travaillera sur une branche git isolee (cs-worktrees/)">
+        <label className="squad-wt-label" title="Chaque agent travaillera sur une branche git isolée (cs-worktrees/)">
           <input type="checkbox" checked={useWorktrees} onChange={(e) => setUseWorktrees(e.target.checked)} />
           <span>Worktrees isolés</span>
           <span className="squad-wt-hint">— branche git par agent dans cs-worktrees/</span>
         </label>
         <div className="squad-tasks-header">
-          <strong>Sous-taches ({tasks.length})</strong>
+          <strong>Sous-tâches ({tasks.length})</strong>
           <button type="button" className="squad-add-btn" onClick={addTask}>+ Ajouter</button>
         </div>
         <div className="squad-tasks-list">
           {tasks.map((t, i) => {
-            // Agents disponibles comme dépendances (tous sauf soi-même)
             const available = tasks.filter((_, j) => j !== i && tasks[j].name.trim());
             const toggleDep = (depName) => {
               const deps = t.dependsOn || [];
@@ -146,26 +280,52 @@ function SquadForm({ onCreated }) {
           })}
         </div>
         {error && <div className="squad-error">{error}</div>}
+
+        {/* Actions principales */}
         <button type="submit" className="squad-launch-btn" disabled={launching}>
           {launching ? 'Lancement...' : `🚀 Lancer le Squad (${tasks.filter((t) => t.task.trim()).length} agents)`}
         </button>
+
+        {/* Sauvegarde template */}
+        <div className="tpl-save-row">
+          <input
+            className="squad-input tpl-save-input"
+            placeholder={`Nom du template (ex: "${name.trim() || 'Refactor Auth'}")`}
+            value={tplName}
+            onChange={(e) => setTplName(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), handleSaveTemplate())}
+          />
+          <button
+            type="button"
+            className="tpl-save-btn"
+            onClick={handleSaveTemplate}
+            disabled={saving || (!tplName.trim() && !name.trim())}
+          >
+            {saving ? '…' : '💾 Enregistrer comme template'}
+          </button>
+          {saveFeedback && <span className="tpl-save-feedback">{saveFeedback}</span>}
+        </div>
       </form>
     </div>
   );
 }
 
+/* ────────────────────────────────────────────────────────────────── */
+/*  Carte squad existant                                              */
+/* ────────────────────────────────────────────────────────────────── */
+
 function SquadCard({ squad, onClick }) {
   const running = squad.members.filter((m) => m.status === 'running').length;
-  const done = squad.members.filter((m) => m.status === 'completed' || m.status === 'exited').length;
-  const total = squad.members.length;
+  const done    = squad.members.filter((m) => m.status === 'completed' || m.status === 'exited').length;
+  const total   = squad.members.length;
   const avgProgress = total > 0
     ? Math.round(squad.members.reduce((s, m) => s + (m.progress || 0), 0) / total)
     : 0;
 
   const statusColors = {
-    running: 'var(--accent)',
+    running:   'var(--accent)',
     completed: 'var(--success, #10b981)',
-    partial: 'var(--warning, #f59e0b)',
+    partial:   'var(--warning, #f59e0b)',
     cancelled: 'var(--error, #ef4444)',
   };
 
@@ -185,7 +345,7 @@ function SquadCard({ squad, onClick }) {
         <span className="squad-progress-text">{avgProgress}%</span>
       </div>
       <div className="squad-card-meta">
-        <span>{done}/{total} termine(s)</span>
+        <span>{done}/{total} terminé(s)</span>
         {running > 0 && <span>{running} en cours</span>}
         <span>{new Date(squad.createdAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}</span>
       </div>
@@ -193,9 +353,15 @@ function SquadCard({ squad, onClick }) {
   );
 }
 
+/* ────────────────────────────────────────────────────────────────── */
+/*  Page principale                                                   */
+/* ────────────────────────────────────────────────────────────────── */
+
 export default function SquadLauncher() {
   const navigate = useNavigate();
-  const [squads, setSquads] = useState([]);
+  const [squads,        setSquads]        = useState([]);
+  const [loadedConfig,  setLoadedConfig]  = useState(null);
+  const [tplRefreshKey, setTplRefreshKey] = useState(0);
 
   const fetchSquads = useCallback(() => {
     fetch('/api/squads').then((r) => r.json()).then(setSquads).catch(console.error);
@@ -214,10 +380,22 @@ export default function SquadLauncher() {
   return (
     <div>
       <h1 style={{ marginBottom: 24 }}>Squad Mode</h1>
-      <SquadForm onCreated={(squad) => {
-        fetchSquads();
-        navigate(`/squads/${squad.id}`);
-      }} />
+
+      {/* Templates enregistrés */}
+      <TemplatesPanel
+        key={tplRefreshKey}
+        onLoad={(config) => setLoadedConfig({ ...config, _ts: Date.now() })}
+      />
+
+      {/* Formulaire */}
+      <SquadForm
+        initialConfig={loadedConfig}
+        onCreated={(squad) => {
+          fetchSquads();
+          navigate(`/squads/${squad.id}`);
+        }}
+        onTemplateRefresh={() => setTplRefreshKey((k) => k + 1)}
+      />
 
       {squads.length > 0 && (
         <>
@@ -231,7 +409,34 @@ export default function SquadLauncher() {
       )}
 
       <style>{`
-        .squad-form-card { margin-bottom: 24px; }
+        /* ── Templates panel ── */
+        .tpl-panel { padding: 12px 16px; }
+        .tpl-toggle { display: flex; justify-content: space-between; align-items: center; width: 100%; background: none; border: none; cursor: pointer; font-size: 14px; font-weight: 600; color: var(--text-primary); padding: 0; }
+        .tpl-toggle:hover { color: var(--accent); }
+        .tpl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; margin-top: 12px; }
+        .tpl-card { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 6px; }
+        .tpl-card-header { display: flex; justify-content: space-between; align-items: center; }
+        .tpl-card-name { font-weight: 700; font-size: 13px; color: var(--text-primary); }
+        .tpl-del-btn { background: none; border: none; color: var(--text-secondary); cursor: pointer; font-size: 12px; padding: 2px 5px; border-radius: 4px; }
+        .tpl-del-btn:hover:not(:disabled) { color: var(--error, #ef4444); }
+        .tpl-card-goal { font-size: 12px; color: var(--text-secondary); margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .tpl-card-meta { display: flex; gap: 8px; font-size: 10px; color: var(--text-secondary); }
+        .tpl-card-tasks { display: flex; flex-wrap: wrap; gap: 4px; }
+        .tpl-task-chip { background: rgba(139,92,246,0.1); border: 1px solid rgba(139,92,246,0.2); border-radius: 10px; padding: 1px 7px; font-size: 10px; color: var(--accent); font-weight: 600; }
+        .tpl-task-more { background: var(--bg-primary); color: var(--text-secondary); border-color: var(--border); }
+        .tpl-load-btn { margin-top: 4px; background: var(--accent); color: white; border: none; border-radius: 6px; padding: 5px 12px; font-size: 12px; font-weight: 600; cursor: pointer; align-self: flex-start; }
+        .tpl-load-btn:hover { filter: brightness(1.1); }
+
+        /* ── Save template row ── */
+        .tpl-save-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding-top: 4px; border-top: 1px solid var(--border); margin-top: 2px; }
+        .tpl-save-input { flex: 1; min-width: 180px; font-size: 12px; padding: 6px 10px; }
+        .tpl-save-btn { background: none; border: 1px solid var(--border); border-radius: 6px; padding: 6px 14px; font-size: 12px; cursor: pointer; color: var(--text-secondary); white-space: nowrap; }
+        .tpl-save-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+        .tpl-save-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+        .tpl-save-feedback { font-size: 12px; color: var(--success, #10b981); font-weight: 600; }
+
+        /* ── Squad form ── */
+        .squad-form-card { margin-bottom: 16px; }
         .squad-form { display: flex; flex-direction: column; gap: 14px; }
         .squad-form-row { display: flex; gap: 12px; flex-wrap: wrap; }
         .squad-label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--text-secondary); font-weight: 600; flex: 1; min-width: 200px; }
@@ -258,6 +463,8 @@ export default function SquadLauncher() {
         .squad-launch-btn { background: var(--accent); color: white; border: none; border-radius: 8px; padding: 10px 20px; font-size: 15px; font-weight: 600; cursor: pointer; }
         .squad-launch-btn:hover:not(:disabled) { filter: brightness(1.1); }
         .squad-launch-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
+        /* ── Squads existants ── */
         .squad-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px; }
         .squad-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; cursor: pointer; transition: border-color 0.2s; }
         .squad-card:hover { border-color: var(--accent); }
