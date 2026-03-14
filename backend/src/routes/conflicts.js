@@ -14,4 +14,22 @@ router.post('/analyze', (req, res) => {
   res.json(conflicts);
 });
 
+// Notifier les sessions impliquees dans un conflit
+router.post('/notify', (req, res) => {
+  const messageBus = req.app.locals.messageBus;
+  const { sessions, message } = req.body;
+  if (!sessions || !Array.isArray(sessions) || sessions.length === 0) {
+    return res.status(400).json({ error: 'sessions array is required' });
+  }
+  const text = message || 'Conflit détecté sur un fichier que vous modifiez. Veuillez coordonner.';
+  let sent = 0;
+  for (const sessionId of sessions) {
+    try {
+      messageBus.send('system', sessionId, text, 'warning');
+      sent++;
+    } catch {}
+  }
+  res.json({ sent, total: sessions.length });
+});
+
 module.exports = router;

@@ -35,4 +35,15 @@ router.delete('/', (req, res) => {
   res.json({ released });
 });
 
+// Forcer la liberation d'un lock (admin)
+router.post('/force-release', (req, res) => {
+  const lockManager = req.app.locals.lockManager;
+  const { filePath, sessionId, reason } = req.body;
+  if (!filePath || !sessionId) {
+    return res.status(400).json({ error: 'filePath and sessionId are required' });
+  }
+  const result = lockManager.forceRelease(filePath, sessionId, reason || 'admin-ui');
+  res.json(result);
+});
+
 module.exports = router;

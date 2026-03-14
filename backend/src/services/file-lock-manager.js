@@ -106,6 +106,20 @@ class FileLockManager {
   }
 
   /**
+   * Force la liberation d'un lock sans accord de la session.
+   */
+  forceRelease(filePath, sessionId, reason = 'admin') {
+    const holders = this.locks.get(filePath);
+    if (!holders || !holders.has(sessionId)) return { released: false, error: 'lock not found' };
+
+    holders.delete(sessionId);
+    if (holders.size === 0) this.locks.delete(filePath);
+    this._persist();
+    this.broadcast('lock:force-released', { filePath, sessionId, reason });
+    return { released: true };
+  }
+
+  /**
    * Retourne tous les locks actifs.
    */
   getLocks() {
