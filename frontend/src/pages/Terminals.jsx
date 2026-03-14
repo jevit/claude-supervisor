@@ -641,7 +641,7 @@ export default function Terminals() {
                 <option value="opus">Opus</option>
                 <option value="haiku">Haiku</option>
               </select>
-              <label className="dangerous-label" title="Injecte automatiquement le contexte partagé dans le prompt initial">
+              <label className="dangerous-label" title={`Ajoute automatiquement le Contexte Partagé au début du prompt initial de Claude.\n\nChaque entrée (clé: valeur) est injectée sous la forme :\n=== CONTEXTE PARTAGE ===\n- conventions/commits: feat:, fix:…\n- stack/node: v20 LTS\n========================\n\nCela permet à Claude de connaître les conventions du projet dès le démarrage, sans avoir à les répéter à la main.\n\n${contextCount > 0 ? `${contextCount} entrée${contextCount > 1 ? 's' : ''} actuellement dans le contexte.` : 'Aucune entrée dans le contexte partagé pour le moment.'}`}>
                 <input type="checkbox" checked={injectContext} onChange={(e) => setInjectContext(e.target.checked)} />
                 <span style={{ fontSize: 13, color: 'var(--text-primary)', fontWeight: 600 }}>Injecter le contexte</span>
                 <span className="dangerous-hint">
