@@ -46,9 +46,20 @@ export default function SharedContext() {
         </button>
       </div>
 
-      <p style={{ color: 'var(--text-secondary)', fontSize: 13, marginBottom: 20 }}>
-        Informations partagees entre toutes les sessions Claude Code (decisions, conventions, decouvertes).
-      </p>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
+        <p style={{ color: 'var(--text-secondary)', fontSize: 13, margin: 0 }}>
+          Informations partagées entre toutes les sessions Claude Code (décisions, conventions, découvertes).
+        </p>
+        {entries.length > 0 && (
+          <span style={{
+            fontSize: 11, fontWeight: 600, padding: '3px 10px', borderRadius: 6, flexShrink: 0,
+            background: 'rgba(139,92,246,0.12)', color: 'var(--accent)',
+            border: '1px solid rgba(139,92,246,0.2)',
+          }}>
+            ⚡ Injecté dans les nouveaux terminaux
+          </span>
+        )}
+      </div>
 
       {showAdd && (
         <div className="card" style={{ marginBottom: 20 }}>

@@ -23,8 +23,8 @@ router.post('/', (req, res) => {
     return res.status(503).json({ error: 'node-pty non disponible' });
   }
   try {
-    const { directory, name, prompt, model, dangerousMode } = req.body;
-    const result = terminalManager.spawn({ directory, name, prompt, model, dangerousMode });
+    const { directory, name, prompt, model, dangerousMode, injectContext } = req.body;
+    const result = terminalManager.spawn({ directory, name, prompt, model, dangerousMode, injectContext });
     res.status(201).json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });

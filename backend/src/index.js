@@ -104,7 +104,8 @@ const gitOrchestrator = new GitOrchestrator(broadcast, store);
 const approvalRules = new ApprovalRules(store);
 
 // Initialiser le gestionnaire de terminaux (node-pty)
-const terminalManager = new TerminalManager(tracker, broadcast, store);
+// sharedContext est passe pour injecter le contexte dans le prompt au spawn
+const terminalManager = new TerminalManager(tracker, broadcast, store, sharedContext);
 
 // Initialiser le gestionnaire de worktrees git
 const repoRoot      = path.resolve(__dirname, '../../');

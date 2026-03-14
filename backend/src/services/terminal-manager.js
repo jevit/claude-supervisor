@@ -16,10 +16,11 @@ try {
  * capture la sortie en temps reel, et permet d'envoyer des commandes.
  */
 class TerminalManager {
-  constructor(tracker, broadcast, store = null) {
+  constructor(tracker, broadcast, store = null, sharedContext = null) {
     this.tracker = tracker;
     this.broadcast = broadcast;
     this.store = store;
+    this.sharedContext = sharedContext;
     // Map terminalId -> { pty, sessionId, buffer, ... }
     this.terminals = new Map();
     this.maxBufferSize = 50000; // Garder les derniers 50k chars par terminal
@@ -44,6 +45,23 @@ class TerminalManager {
     const cwd = options.directory || process.cwd();
     const name = options.name || `Claude ${path.basename(cwd)}`;
 
+    // Injecter le contexte partage dans le prompt si disponible et non desactive
+    let effectivePrompt = options.prompt || null;
+    if (options.injectContext !== false && this.sharedContext) {
+      const entries = this.sharedContext.getAll()
+        .filter((e) => !e.key.startsWith('squad:')); // Exclure le contexte interne des squads
+      if (entries.length > 0) {
+        const contextBlock = [
+          '=== CONTEXTE PARTAGE (claude-supervisor) ===',
+          ...entries.map((e) => `- ${e.key}: ${e.value}`),
+          '============================================',
+        ].join('\n');
+        effectivePrompt = effectivePrompt
+          ? `${contextBlock}\n\n${effectivePrompt}`
+          : contextBlock;
+      }
+    }
+
     // Determiner le shell
     const isWindows = os.platform() === 'win32';
     const shell = isWindows ? 'cmd.exe' : (process.env.SHELL || '/bin/bash');
@@ -53,8 +71,8 @@ class TerminalManager {
     if (options.dangerousMode) {
       claudeArgs.push('--dangerously-skip-permissions');
     }
-    if (options.prompt) {
-      claudeArgs.push('--prompt', options.prompt);
+    if (effectivePrompt) {
+      claudeArgs.push('--prompt', effectivePrompt);
     }
     if (options.model) {
       claudeArgs.push('--model', options.model);
@@ -83,7 +101,9 @@ class TerminalManager {
       sessionId: terminalId,
       name,
       directory: cwd,
-      prompt: options.prompt || null,
+      prompt: effectivePrompt,
+      promptOriginal: options.prompt || null,
+      contextInjected: effectivePrompt !== (options.prompt || null),
       model: options.model || null,
       buffer: '',
       status: 'running',

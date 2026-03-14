@@ -246,11 +246,21 @@ export default function Terminals() {
   }, [searchParams, setSearchParams]);
 
   // Formulaire de lancement
-  const [directory, setDirectory]       = useState('');
-  const [name, setName]                 = useState('');
-  const [prompt, setPrompt]             = useState('');
-  const [model, setModel]               = useState('');
+  const [directory, setDirectory]         = useState('');
+  const [name, setName]                   = useState('');
+  const [prompt, setPrompt]               = useState('');
+  const [model, setModel]                 = useState('');
   const [dangerousMode, setDangerousMode] = useState(false);
+  const [injectContext, setInjectContext] = useState(true);
+  const [contextCount, setContextCount]   = useState(0);
+
+  // Charger le nombre d'entrees de contexte partagé pour affichage dans le formulaire
+  useEffect(() => {
+    fetch('/api/context')
+      .then((r) => r.json())
+      .then((entries) => setContextCount(Array.isArray(entries) ? entries.filter((e) => !e.key.startsWith('squad:')).length : 0))
+      .catch(() => {});
+  }, []);
 
   const fetchTerminals = useCallback(async () => {
     try {
@@ -277,11 +287,12 @@ export default function Terminals() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          directory:    directory || undefined,
-          name:         name || undefined,
-          prompt:       prompt || undefined,
-          model:        model || undefined,
+          directory:     directory || undefined,
+          name:          name || undefined,
+          prompt:        prompt || undefined,
+          model:         model || undefined,
           dangerousMode: dangerousMode || undefined,
+          injectContext: injectContext,
         }),
       });
       const data = await res.json();
@@ -432,6 +443,13 @@ export default function Terminals() {
                 <option value="opus">Opus</option>
                 <option value="haiku">Haiku</option>
               </select>
+              <label className="dangerous-label" title="Injecte automatiquement le contexte partagé dans le prompt initial">
+                <input type="checkbox" checked={injectContext} onChange={(e) => setInjectContext(e.target.checked)} />
+                <span style={{ fontSize: 13, color: 'var(--text-primary)', fontWeight: 600 }}>Injecter le contexte</span>
+                <span className="dangerous-hint">
+                  {contextCount > 0 ? `(${contextCount} entrée${contextCount > 1 ? 's' : ''})` : '(vide)'}
+                </span>
+              </label>
               <label className="dangerous-label">
                 <input type="checkbox" checked={dangerousMode} onChange={(e) => setDangerousMode(e.target.checked)} />
                 <span className="dangerous-text">Mode dangereux</span>
