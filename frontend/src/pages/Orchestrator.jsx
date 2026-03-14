@@ -2,27 +2,6 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useWebSocket } from '../services/websocket';
 
-/* ── Constantes ──────────────────────────────────────────────────── */
-const STATUS_COLOR = {
-  running:   '#8b5cf6',
-  completed: '#10b981',
-  exited:    '#10b981',
-  waiting:   '#64748b',
-  error:     '#ef4444',
-  cancelled: '#f59e0b',
-  killed:    '#ef4444',
-};
-
-const ANSI_RE = /\x1b\[[0-9;]*[a-zA-Z]/g;
-
-function cleanAnsi(str) {
-  return (str || '').replace(ANSI_RE, '');
-}
-
-function lastLines(raw, n = 4) {
-  return cleanAnsi(raw).split('\n').map((l) => l.trimEnd()).filter((l) => l).slice(-n).join('\n');
-}
-
 /* ── Carte KPI ───────────────────────────────────────────────────── */
 function Kpi({ value, label, color = '#8b5cf6', onClick }) {
   return (
