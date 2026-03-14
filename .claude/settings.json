@@ -5,7 +5,7 @@
     "version": "1.0.0"
   },
   "agents": {
-    "defaultModel": "claude-sonnet-4-5-20250929",
+    "defaultModel": "claude-sonnet-4-6",
     "supervisorModel": "claude-opus-4-6",
     "maxConcurrentAgents": 5
   },

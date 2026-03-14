@@ -1,14 +1,46 @@
+# Dépendances
 node_modules/
+
+# Build
 dist/
 build/
+
+# Environnement (per-machine)
 .env
 .env.local
+**/.env
+
+# Logs
 *.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS
 .DS_Store
 Thumbs.db
-coverage/
+desktop.ini
+
+# IDE
 .vscode/
 .idea/
-data/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+
+# Tests
+coverage/
 test-results/
 playwright-report/
+e2e/screenshots/
+
+# Runtime / données persistées
+data/
+
+# Claude Code — settings machine-spécifiques
+**/.claude/settings.local.json
+
+# node-pty rebuild artifacts
+build/Release/
+prebuilds/

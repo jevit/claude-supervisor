@@ -5,7 +5,6 @@
       "args": ["C:/Perso/Workspace3/claude-supervisor/mcp/supervisor-mcp.js"],
       "env": {
         "SUPERVISOR_URL": "http://localhost:3001",
-        "SESSION_NAME": "Claude Code",
         "SESSION_DIR": "C:/Perso/Workspace3"
       }
     }
