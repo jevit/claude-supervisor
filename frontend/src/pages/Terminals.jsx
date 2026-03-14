@@ -14,20 +14,28 @@ const LAYOUTS = [
 ];
 
 /**
- * Composant d'un terminal individuel avec xterm.js
+ * Composant d'un terminal individuel avec xterm.js.
+ * Gère le replay du buffer au montage et à chaque reconnexion WS.
  */
 function TerminalView({ terminalId, terminalName, terminalDirectory, onClose, onRename, compact = false }) {
   const containerRef = useRef(null);
-  const xtermRef    = useRef(null);
-  const fitAddonRef = useRef(null);
-  const wsRef       = useRef(null);
-  const [editing, setEditing]   = useState(false);
-  const [editName, setEditName] = useState(terminalName || '');
-  const [showDiff, setShowDiff] = useState(false);
+  const xtermRef     = useRef(null);
+  const fitAddonRef  = useRef(null);
+  const wsRef        = useRef(null);
+  const destroyedRef = useRef(false);
+  const reconnTimerRef = useRef(null);
+
+  const [editing,   setEditing]   = useState(false);
+  const [editName,  setEditName]  = useState(terminalName || '');
+  const [showDiff,  setShowDiff]  = useState(false);
+  const [replaying, setReplaying] = useState(false); // lecture buffer en cours
+  const [wsStatus,  setWsStatus]  = useState('connecting'); // connecting | open | closed
 
   useEffect(() => {
     if (!containerRef.current || !terminalId) return;
+    destroyedRef.current = false;
 
+    /* ── Initialisation xterm ─────────────────────────────────── */
     const xterm = new XTerm({
       theme: {
         background: '#1a1b26',
@@ -35,10 +43,10 @@ function TerminalView({ terminalId, terminalName, terminalDirectory, onClose, on
         cursor:     '#c0caf5',
         selection:  'rgba(139, 92, 246, 0.3)',
       },
-      fontFamily:   '"Cascadia Code", "Fira Code", Consolas, monospace',
-      fontSize:     compact ? 11 : 13,
-      cursorBlink:  true,
-      scrollback:   5000,
+      fontFamily:  '"Cascadia Code", "Fira Code", Consolas, monospace',
+      fontSize:    compact ? 11 : 13,
+      cursorBlink: true,
+      scrollback:  5000,
       rightClickSelectsWord: true,
     });
 
@@ -47,6 +55,10 @@ function TerminalView({ terminalId, terminalName, terminalDirectory, onClose, on
     xterm.open(containerRef.current);
     requestAnimationFrame(() => fitAddon.fit());
 
+    xtermRef.current    = xterm;
+    fitAddonRef.current = fitAddon;
+
+    /* ── Copier/coller ────────────────────────────────────────── */
     xterm.attachCustomKeyEventHandler((e) => {
       if (e.ctrlKey && e.key === 'c' && xterm.hasSelection()) {
         navigator.clipboard.writeText(xterm.getSelection());
@@ -80,27 +92,7 @@ function TerminalView({ terminalId, terminalName, terminalDirectory, onClose, on
       }).catch(() => {});
     });
 
-    xtermRef.current    = xterm;
-    fitAddonRef.current = fitAddon;
-
-    fetch(`/api/terminals/${terminalId}/output?last=10000`)
-      .then((r) => r.json())
-      .then((data) => { if (data.output) xterm.write(data.output); })
-      .catch(() => {});
-
-    const wsUrl = `ws://${window.location.hostname}:3001`;
-    const ws    = new WebSocket(wsUrl);
-    wsRef.current = ws;
-
-    ws.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data);
-        if (msg.event === 'terminal:output' && msg.data?.terminalId === terminalId) {
-          xterm.write(msg.data.data);
-        }
-      } catch {}
-    };
-
+    /* ── Saisie utilisateur → backend ─────────────────────────── */
     xterm.onData((data) => {
       fetch(`/api/terminals/${terminalId}/write`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -108,6 +100,7 @@ function TerminalView({ terminalId, terminalName, terminalDirectory, onClose, on
       }).catch(() => {});
     });
 
+    /* ── Resize ───────────────────────────────────────────────── */
     const resizeObserver = new ResizeObserver(() => {
       fitAddon.fit();
       fetch(`/api/terminals/${terminalId}/resize`, {
@@ -117,9 +110,66 @@ function TerminalView({ terminalId, terminalName, terminalDirectory, onClose, on
     });
     resizeObserver.observe(containerRef.current);
 
+    /* ── Replay du buffer ─────────────────────────────────────── */
+    const replayBuffer = async () => {
+      if (destroyedRef.current) return;
+      setReplaying(true);
+      try {
+        const res  = await fetch(`/api/terminals/${terminalId}/output?last=50000`);
+        const data = await res.json();
+        if (!destroyedRef.current && data.output) {
+          xterm.reset();             // repart d'un état propre
+          xterm.write(data.output);  // rejoue tout le buffer
+          xterm.scrollToBottom();
+        }
+      } catch {}
+      if (!destroyedRef.current) setReplaying(false);
+    };
+
+    /* ── WebSocket avec reconnexion automatique ───────────────── */
+    const wsUrl = `ws://${window.location.hostname}:3001`;
+    let reconnectDelay = 1000;
+
+    const connect = () => {
+      if (destroyedRef.current) return;
+      setWsStatus('connecting');
+
+      const ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        if (destroyedRef.current) { ws.close(); return; }
+        reconnectDelay = 1000; // reset le backoff
+        setWsStatus('open');
+        // Re-rejoue le buffer pour combler les trous pendant la déconnexion
+        replayBuffer();
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.event === 'terminal:output' && msg.data?.terminalId === terminalId) {
+            if (!destroyedRef.current) xterm.write(msg.data.data);
+          }
+        } catch {}
+      };
+
+      ws.onclose = () => {
+        if (destroyedRef.current) return;
+        setWsStatus('closed');
+        // Reconnexion avec backoff exponentiel (max 10s)
+        reconnectDelay = Math.min(reconnectDelay * 2, 10000);
+        reconnTimerRef.current = setTimeout(connect, reconnectDelay);
+      };
+    };
+
+    connect(); // connexion initiale
+
     return () => {
+      destroyedRef.current = true;
+      clearTimeout(reconnTimerRef.current);
       resizeObserver.disconnect();
-      ws.close();
+      wsRef.current?.close();
       xterm.dispose();
     };
   }, [terminalId, compact]);
@@ -165,6 +215,19 @@ function TerminalView({ terminalId, terminalName, terminalDirectory, onClose, on
           )}
         </div>
         <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexShrink: 0 }}>
+          {/* Indicateur connexion WS */}
+          <span
+            title={replaying ? 'Replay en cours…' : wsStatus === 'open' ? 'Connecté' : wsStatus === 'connecting' ? 'Reconnexion…' : 'Déconnecté'}
+            style={{
+              display: 'inline-block', width: 7, height: 7, borderRadius: '50%', flexShrink: 0,
+              background: replaying
+                ? '#f59e0b'
+                : wsStatus === 'open' ? '#22c55e'
+                : wsStatus === 'connecting' ? '#f59e0b'
+                : '#ef4444',
+              animation: (wsStatus !== 'open' || replaying) ? 'ws-blink 1s ease-in-out infinite' : 'none',
+            }}
+          />
           <button
             onClick={() => setShowDiff(v => !v)}
             style={{
@@ -619,6 +682,7 @@ export default function Terminals() {
         .dangerous-hint { font-size: 11px; color: var(--text-secondary); }
         .cleanup-btn { background: none; border: 1px solid var(--border); border-radius: 6px; padding: 3px 10px; font-size: 11px; cursor: pointer; color: var(--text-secondary); }
         .cleanup-btn:hover { background: rgba(239,68,68,0.1); color: var(--error, #ef4444); border-color: var(--error, #ef4444); }
+        @keyframes ws-blink { 0%,100% { opacity: 1; } 50% { opacity: 0.25; } }
       `}</style>
     </div>
   );
