@@ -5,15 +5,19 @@ const { randomUUID } = require('crypto');
  *
  * Un squad = une mission decomposee en sous-taches, chaque sous-tache
  * assignee a un terminal Claude Code independant.
+ *
+ * Option useWorktrees : chaque membre obtient son propre git worktree
+ * (branche isolee), ce qui evite les conflits de fichiers entre agents.
  */
 class SquadManager {
-  constructor(terminalManager, sharedContext, messageBus, broadcast, store) {
-    this.terminalManager = terminalManager;
-    this.sharedContext = sharedContext;
-    this.messageBus = messageBus;
-    this.broadcast = broadcast;
-    this.store = store;
-    this.squads = new Map();
+  constructor(terminalManager, sharedContext, messageBus, broadcast, store, worktreeManager = null) {
+    this.terminalManager  = terminalManager;
+    this.sharedContext    = sharedContext;
+    this.messageBus       = messageBus;
+    this.broadcast        = broadcast;
+    this.store            = store;
+    this.worktreeManager  = worktreeManager;
+    this.squads           = new Map();
 
     // Restaurer depuis le store
     const saved = store.get('squads');
@@ -34,13 +38,23 @@ class SquadManager {
 
   /**
    * Creer un nouveau squad et lancer les terminaux.
+   * @param {object} opts
+   * @param {string}  opts.name
+   * @param {string}  opts.goal
+   * @param {string}  [opts.directory]       - Repertoire de base (worktree source)
+   * @param {Array}   opts.tasks             - [{name, task}]
+   * @param {string}  [opts.model]
+   * @param {boolean} [opts.autoCoordinate]  - Partager l'objectif dans SharedContext
+   * @param {boolean} [opts.useWorktrees]    - Creer un git worktree par membre
    */
-  createSquad({ name, goal, directory, tasks, model, autoCoordinate = true }) {
+  createSquad({ name, goal, directory, tasks, model, autoCoordinate = true, useWorktrees = false }) {
     if (!name || !goal || !tasks || !Array.isArray(tasks) || tasks.length === 0) {
       return null;
     }
 
     const squadId = randomUUID();
+    const useWt   = useWorktrees && !!this.worktreeManager && this.worktreeManager.isGitRepo();
+
     const squad = {
       id: squadId,
       name,
@@ -48,6 +62,7 @@ class SquadManager {
       directory: directory || process.cwd(),
       model: model || null,
       autoCoordinate,
+      useWorktrees: useWt,
       status: 'running',
       members: [],
       createdAt: new Date().toISOString(),
@@ -57,11 +72,31 @@ class SquadManager {
     // Lancer un terminal par tache
     for (const task of tasks) {
       const memberName = task.name || `Agent ${squad.members.length + 1}`;
-      const prompt = this._buildPrompt(squad, memberName, task.task, tasks);
+      const safeName   = memberName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+      const branchName = `squad/${squadId.substring(0, 8)}/${safeName}`;
+
+      // Determiner le repertoire de travail
+      let workDir   = directory || undefined;
+      let worktreePath = null;
+
+      if (useWt) {
+        try {
+          const folderName = `${squadId.substring(0, 8)}-${safeName}`;
+          worktreePath = this.worktreeManager.create(branchName, folderName);
+          workDir = worktreePath;
+          console.log(`WorktreeManager: cree ${worktreePath} pour ${memberName}`);
+        } catch (err) {
+          console.warn(`WorktreeManager: echec creation worktree pour ${memberName}: ${err.message}`);
+          worktreePath = null;
+          workDir = directory || undefined;
+        }
+      }
+
+      const prompt = this._buildPrompt(squad, memberName, task.task, tasks, useWt);
 
       try {
         const result = this.terminalManager.spawn({
-          directory: directory || undefined,
+          directory: workDir,
           name: `[Squad] ${memberName}`,
           prompt,
           model: model || undefined,
@@ -71,16 +106,24 @@ class SquadManager {
           id: result.terminalId,
           name: memberName,
           task: task.task,
+          branch: useWt ? branchName : null,
+          worktreePath,
           status: 'running',
           progress: 0,
           startedAt: new Date().toISOString(),
           completedAt: null,
         });
       } catch (err) {
+        // Nettoyer le worktree si le terminal n'a pas pu demarrer
+        if (worktreePath) {
+          try { this.worktreeManager.remove(worktreePath, branchName); } catch {}
+        }
         squad.members.push({
           id: null,
           name: memberName,
           task: task.task,
+          branch: null,
+          worktreePath: null,
           status: 'error',
           progress: 0,
           error: err.message,
@@ -93,15 +136,27 @@ class SquadManager {
     // Partager le contexte du squad
     if (autoCoordinate && this.sharedContext) {
       this.sharedContext.add(`squad:${squadId}:goal`, goal, 'squad-manager');
-      this.sharedContext.add(`squad:${squadId}:members`,
-        JSON.stringify(squad.members.map((m) => ({ name: m.name, task: m.task }))),
+      this.sharedContext.add(
+        `squad:${squadId}:members`,
+        JSON.stringify(squad.members.map((m) => ({ name: m.name, task: m.task, branch: m.branch }))),
         'squad-manager'
       );
+      if (useWt) {
+        this.sharedContext.add(
+          `squad:${squadId}:worktrees`,
+          'Chaque agent travaille sur sa propre branche git isolee. Merges manuels a la fin.',
+          'squad-manager'
+        );
+      }
     }
 
     this.squads.set(squadId, squad);
     this._persist();
-    this.broadcast('squad:created', { id: squadId, name, goal, memberCount: squad.members.length });
+    this.broadcast('squad:created', {
+      id: squadId, name, goal,
+      memberCount: squad.members.length,
+      useWorktrees: useWt,
+    });
 
     return squad;
   }
@@ -109,11 +164,15 @@ class SquadManager {
   /**
    * Construire le prompt d'un membre du squad.
    */
-  _buildPrompt(squad, memberName, task, allTasks) {
+  _buildPrompt(squad, memberName, task, allTasks, useWorktrees) {
     const otherTasks = allTasks
       .filter((t) => (t.name || '') !== memberName)
       .map((t) => `- ${t.name || 'Agent'}: ${t.task}`)
       .join('\n');
+
+    const worktreeNote = useWorktrees
+      ? `\nBRANCHE GIT: Tu travailles sur une branche isolee. Commits libres, pas de risque de conflit avec les autres agents.`
+      : '';
 
     return `Tu es l'agent "${memberName}" dans un squad de ${allTasks.length} agents.
 
@@ -121,7 +180,7 @@ MISSION GLOBALE: ${squad.goal}
 
 TA TACHE SPECIFIQUE: ${task}
 
-Repertoire de travail: ${squad.directory}
+Repertoire de travail: ${squad.directory}${worktreeNote}
 
 AUTRES AGENTS DU SQUAD:
 ${otherTasks || '(aucun)'}
@@ -149,7 +208,7 @@ REGLES DE COORDINATION:
   }
 
   /**
-   * Annuler un squad (tuer tous les terminaux).
+   * Annuler un squad (tuer tous les terminaux + nettoyer les worktrees).
    */
   cancelSquad(squadId) {
     const squad = this.squads.get(squadId);
@@ -157,11 +216,14 @@ REGLES DE COORDINATION:
 
     for (const member of squad.members) {
       if (member.id && member.status === 'running') {
-        try {
-          this.terminalManager.kill(member.id);
-        } catch {}
+        try { this.terminalManager.kill(member.id); } catch {}
         member.status = 'cancelled';
         member.completedAt = new Date().toISOString();
+      }
+      // Nettoyer le worktree si present
+      if (member.worktreePath && this.worktreeManager) {
+        try { this.worktreeManager.remove(member.worktreePath, member.branch); } catch {}
+        member.worktreePath = null;
       }
     }
 
@@ -181,10 +243,7 @@ REGLES DE COORDINATION:
     let sent = 0;
     for (const member of squad.members) {
       if (member.id && member.status === 'running') {
-        try {
-          this.terminalManager.write(member.id, message + '\n');
-          sent++;
-        } catch {}
+        try { this.terminalManager.write(member.id, message + '\n'); sent++; } catch {}
       }
     }
     return sent;
@@ -226,7 +285,6 @@ REGLES DE COORDINATION:
       }
     }
 
-    // Verifier si le squad est termine
     const running = squad.members.filter((m) => m.status === 'running');
     if (running.length === 0 && squad.status === 'running') {
       const completed = squad.members.filter((m) => m.status === 'completed' || m.status === 'exited');
@@ -238,6 +296,7 @@ REGLES DE COORDINATION:
         name: squad.name,
         completedCount: completed.length,
         totalCount: squad.members.length,
+        useWorktrees: squad.useWorktrees,
       });
     }
 
@@ -246,9 +305,7 @@ REGLES DE COORDINATION:
 
   _syncAll() {
     for (const squad of this.squads.values()) {
-      if (squad.status === 'running') {
-        this._syncMemberStatuses(squad);
-      }
+      if (squad.status === 'running') this._syncMemberStatuses(squad);
     }
   }
 
@@ -257,10 +314,13 @@ REGLES DE COORDINATION:
       id: squad.id,
       name: squad.name,
       status: squad.status,
+      useWorktrees: squad.useWorktrees,
       members: squad.members.map((m) => ({
         id: m.id,
         name: m.name,
         task: m.task,
+        branch: m.branch,
+        worktreePath: m.worktreePath,
         status: m.status,
         progress: m.progress,
       })),
@@ -268,17 +328,21 @@ REGLES DE COORDINATION:
   }
 
   /**
-   * Supprimer un squad termine de l'historique.
+   * Supprimer un squad termine de l'historique + nettoyer les worktrees.
    */
   removeSquad(squadId) {
     const squad = this.squads.get(squadId);
     if (!squad) return false;
-    // Tuer les terminaux encore actifs
+
     for (const member of squad.members) {
       if (member.id && member.status === 'running') {
         try { this.terminalManager.kill(member.id); } catch {}
       }
+      if (member.worktreePath && this.worktreeManager) {
+        try { this.worktreeManager.remove(member.worktreePath, member.branch); } catch {}
+      }
     }
+
     this.squads.delete(squadId);
     this._persist();
     return true;

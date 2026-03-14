@@ -11,6 +11,7 @@ function SquadForm({ onCreated }) {
     { name: 'Agent 1', task: '' },
     { name: 'Agent 2', task: '' },
   ]);
+  const [useWorktrees, setUseWorktrees] = useState(false);
   const [launching, setLaunching] = useState(false);
   const [error, setError] = useState('');
 
@@ -43,6 +44,7 @@ function SquadForm({ onCreated }) {
           directory: directory.trim() || undefined,
           model: model || undefined,
           tasks: tasks.filter((t) => t.task.trim()),
+          useWorktrees,
         }),
       });
       const data = await res.json();
@@ -87,6 +89,11 @@ function SquadForm({ onCreated }) {
           <textarea className="squad-input squad-textarea" rows={2}
             placeholder="Decrire la mission globale du squad..."
             value={goal} onChange={(e) => setGoal(e.target.value)} required />
+        </label>
+        <label className="squad-wt-label" title="Chaque agent travaillera sur une branche git isolee (cs-worktrees/)">
+          <input type="checkbox" checked={useWorktrees} onChange={(e) => setUseWorktrees(e.target.checked)} />
+          <span>Worktrees isolés</span>
+          <span className="squad-wt-hint">— branche git par agent dans cs-worktrees/</span>
         </label>
         <div className="squad-tasks-header">
           <strong>Sous-taches ({tasks.length})</strong>
@@ -205,6 +212,8 @@ export default function SquadLauncher() {
         .squad-task-name { max-width: 140px; flex: 0 0 140px; }
         .squad-remove-btn { background: none; border: none; color: var(--error, #ef4444); cursor: pointer; font-size: 16px; padding: 4px 8px; }
         .squad-remove-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+        .squad-wt-label { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; font-weight: 600; color: var(--text-primary); }
+        .squad-wt-hint { font-size: 11px; color: var(--text-secondary); font-weight: 400; }
         .squad-error { font-size: 13px; color: var(--error, #ef4444); background: rgba(239,68,68,0.1); padding: 8px 10px; border-radius: 6px; }
         .squad-launch-btn { background: var(--accent); color: white; border: none; border-radius: 8px; padding: 10px 20px; font-size: 15px; font-weight: 600; cursor: pointer; }
         .squad-launch-btn:hover:not(:disabled) { filter: brightness(1.1); }
