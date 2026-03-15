@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useWebSocket } from '../services/websocket';
+import GitDiffPanel from '../components/GitDiffPanel';
+import { useToast } from '../components/Toast';
 
 const STATUS_COLOR = { modified: '#3b82f6', added: '#10b981', deleted: '#ef4444', untracked: '#6b7280' };
 const STATUS_LETTER = { modified: 'M', added: 'A', deleted: 'D', untracked: '?' };
@@ -21,10 +23,8 @@ function FilesOverview() {
 
   // Ecouter les file:activity pour refresh rapide
   useEffect(() => {
-    const handler = () => fetch$();
-    window.addEventListener('ws:message', (e) => {
-      if (e.detail?.event === 'file:activity') fetch$();
-    });
+    const handler = (e) => { if (e.detail?.event === 'file:activity') fetch$(); };
+    window.addEventListener('ws:message', handler);
     return () => window.removeEventListener('ws:message', handler);
   }, [fetch$]);
 
@@ -158,6 +158,7 @@ function FilesOverview() {
 }
 
 export default function Conflicts() {
+  const addToast = useToast();
   const [conflicts, setConflicts] = useState([]);
   const [locks, setLocks]         = useState([]);
   const [loading, setLoading]     = useState(true);
@@ -166,6 +167,7 @@ export default function Conflicts() {
   const [unlocking, setUnlocking] = useState({});
   const [notifying, setNotifying] = useState({});
   const [notified, setNotified]   = useState({});
+  const [expandedDiff, setExpandedDiff] = useState({}); // { [conflictKey]: sessionId } (#33)
 
   const fetchData = useCallback(() => {
     Promise.all([
@@ -176,11 +178,16 @@ export default function Conflicts() {
       .catch(console.error);
   }, []);
 
-  // Chargement initial + polling fallback toutes les 5s
+  // Chargement initial + polling fallback toutes les 5s (pause si onglet masqué)
   useEffect(() => {
     fetchData();
-    const t = setInterval(fetchData, 5000);
-    return () => clearInterval(t);
+    let t = setInterval(fetchData, 5000);
+    const onVisibility = () => {
+      if (document.hidden) { clearInterval(t); t = null; }
+      else { clearInterval(t); fetchData(); t = setInterval(fetchData, 5000); }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => { clearInterval(t); document.removeEventListener('visibilitychange', onVisibility); };
   }, [fetchData]);
 
   // Mises à jour temps réel via WS
@@ -193,7 +200,10 @@ export default function Conflicts() {
     try {
       const c = await fetch('/api/conflicts/analyze', { method: 'POST' }).then((r) => r.json());
       setConflicts(c);
-    } catch {}
+      addToast(c.length === 0 ? '✓ Aucun conflit détecté' : `⚠ ${c.length} conflit(s) détecté(s)`, c.length === 0 ? 'success' : 'warning');
+    } catch {
+      addToast('Erreur lors de l\'analyse', 'error');
+    }
     setAnalyzing(false);
   };
 
@@ -202,13 +212,20 @@ export default function Conflicts() {
     const key = `${filePath}::${sessionId}`;
     setUnlocking((p) => ({ ...p, [key]: true }));
     try {
-      await fetch('/api/locks/force-release', {
+      const res = await fetch('/api/locks/force-release', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ filePath, sessionId, reason: 'admin-ui' }),
       });
+      if (res.ok) {
+        addToast(`✓ Verrou libéré — ${filePath.split('/').pop() || filePath}`, 'success');
+      } else {
+        addToast('Erreur lors du déverrouillage', 'error');
+      }
       fetchData();
-    } catch {}
+    } catch {
+      addToast('Erreur lors du déverrouillage', 'error');
+    }
     setUnlocking((p) => ({ ...p, [key]: false }));
   };
 
@@ -218,7 +235,7 @@ export default function Conflicts() {
     setNotifying((p) => ({ ...p, [key]: true }));
     const path = conflict.details?.filePath || conflict.details?.directory || '';
     try {
-      await fetch('/api/conflicts/notify', {
+      const res = await fetch('/api/conflicts/notify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -226,9 +243,13 @@ export default function Conflicts() {
           message: `Conflit détecté sur "${path}". Coordonnez-vous avant de continuer.`,
         }),
       });
+      const data = await res.json().catch(() => ({}));
+      addToast(`✓ ${data.sent ?? conflict.sessions.length} session(s) notifiée(s)`, 'success');
       setNotified((p) => ({ ...p, [key]: true }));
       setTimeout(() => setNotified((p) => ({ ...p, [key]: false })), 2500);
-    } catch {}
+    } catch {
+      addToast('Erreur lors de la notification', 'error');
+    }
     setNotifying((p) => ({ ...p, [key]: false }));
   };
 
@@ -262,7 +283,7 @@ export default function Conflicts() {
       ) : (
         conflicts.map((c) => {
           const path   = c.details?.filePath || c.details?.directory || '';
-          const key    = c.id || path;
+          const key    = c.id || `${c.type}:${path}`;
           const isNotifying = notifying[key];
           const isDone      = notified[key];
           return (
@@ -293,6 +314,28 @@ export default function Conflicts() {
                   ? 'Suggestion : coordonner les modifications ou attendre que la première session termine.'
                   : 'Suggestion : vérifier que les sessions ne travaillent pas sur les mêmes fichiers.'}
               </div>
+              {/* Diff détaillé par session (#33) */}
+              {c.type === 'file' && c.sessions.length > 0 && (
+                <div style={{ marginTop: 8, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {c.sessions.map((sid) => {
+                    const isExpanded = expandedDiff[key] === sid;
+                    return (
+                      <button key={sid}
+                        onClick={() => setExpandedDiff((prev) => ({ ...prev, [key]: isExpanded ? null : sid }))}
+                        style={{ fontSize: 11, background: isExpanded ? 'rgba(139,92,246,0.15)' : 'none', border: '1px solid var(--border)', borderRadius: 4, color: isExpanded ? '#8b5cf6' : 'var(--text-secondary)', cursor: 'pointer', padding: '2px 8px' }}
+                        title={`Voir le diff Git de la session ${sid.substring(0, 8)}`}
+                      >
+                        {isExpanded ? '▲' : '⎇'} Diff {sid.substring(0, 8)}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              {expandedDiff[key] && (
+                <div style={{ marginTop: 8 }}>
+                  <GitDiffPanel terminalId={expandedDiff[key]} />
+                </div>
+              )}
             </div>
           );
         })

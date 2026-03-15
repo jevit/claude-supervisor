@@ -25,7 +25,7 @@ router.post('/notify', (req, res) => {
   let sent = 0;
   for (const sessionId of sessions) {
     try {
-      messageBus.send('system', sessionId, text, 'warning');
+      messageBus.send('system', sessionId, { type: 'warning', content: text });
       sent++;
     } catch {}
   }

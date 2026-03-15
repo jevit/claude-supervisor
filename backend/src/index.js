@@ -37,14 +37,7 @@ const contextRoutes = require('./routes/context');
 const envRoutes = require('./routes/env');
 const gitRoutes = require('./routes/git');
 
-const app = express();
-const server = http.createServer(app);
-const wss = new WebSocketServer({ server });
-
-app.use(cors());
-app.use(express.json());
-
-// Charger settings.json
+// Charger settings.json AVANT de configurer le serveur
 let settings = {};
 const settingsPath = path.resolve(__dirname, '../../.claude/settings.json');
 try {
@@ -54,6 +47,28 @@ try {
   }
 } catch (err) {
   console.warn('Impossible de charger settings.json:', err.message);
+}
+
+const app = express();
+const server = http.createServer(app);
+const wss = new WebSocketServer({ server });
+
+// CORS limité aux origines locales connues (#71)
+const allowedOrigins = (settings.corsOrigins || ['http://localhost:3000', 'http://127.0.0.1:3000']);
+app.use(cors({ origin: allowedOrigins }));
+app.use(express.json());
+
+// Auth token optionnel (#68) — si défini dans settings.json, exiger X-Supervisor-Token sur les routes API
+const SUPERVISOR_TOKEN = settings.authToken || process.env.SUPERVISOR_TOKEN || null;
+if (SUPERVISOR_TOKEN) {
+  app.use('/api/', (req, res, next) => {
+    const token = req.headers['x-supervisor-token'];
+    if (!token || token !== SUPERVISOR_TOKEN) {
+      return res.status(401).json({ error: 'Token d\'authentification invalide ou manquant (X-Supervisor-Token)' });
+    }
+    next();
+  });
+  console.log('Auth token activé — les requêtes API nécessitent X-Supervisor-Token');
 }
 
 // Initialiser le store de persistance
@@ -72,12 +87,20 @@ const CONFLICT_TRIGGER_EVENTS = new Set([
 ]);
 
 // Broadcast updates to all connected dashboard clients
+// Pour terminal:output, filtrer selon les abonnements WS (#54) — wsProtocol défini plus bas
+let wsProtocol = null; // sera initialisé après
 function broadcast(event, data) {
   const message = JSON.stringify({ event, data, timestamp: new Date().toISOString() });
+  const isTerminalOutput = event === 'terminal:output';
+  const terminalId = isTerminalOutput ? data?.terminalId : null;
+
   wss.clients.forEach((client) => {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(message);
+    if (client.readyState !== WebSocket.OPEN) return;
+    // Filtrage subscription pour terminal:output
+    if (isTerminalOutput && wsProtocol && terminalId) {
+      if (!wsProtocol.isSubscribedTo(client, terminalId)) return;
     }
+    client.send(message);
   });
   // Enregistrer dans le journal unifie
   const source = data?.id || data?.sessionId || data?.agentId || 'system';
@@ -113,7 +136,7 @@ terminalManager.loadPersistedSessions();
 
 // Initialiser le gestionnaire de worktrees git
 const repoRoot      = path.resolve(__dirname, '../../');
-const worktreesDir  = process.env.WORKTREES_DIR || path.resolve(repoRoot, '../cs-worktrees');
+const worktreesDir  = process.env.WORKTREES_DIR || settings.worktreeBase || path.resolve(repoRoot, '../cs-worktrees'); // #80
 const worktreeManager = new WorktreeManager(repoRoot, worktreesDir);
 console.log(`WorktreeManager: repo=${repoRoot}, worktrees=${worktreesDir}`);
 
@@ -121,8 +144,8 @@ console.log(`WorktreeManager: repo=${repoRoot}, worktrees=${worktreesDir}`);
 const squadManager   = new SquadManager(terminalManager, sharedContext, messageBus, broadcast, store, worktreeManager);
 const squadTemplates = new SquadTemplates(store);
 
-// Initialiser le protocole WebSocket
-const wsProtocol = new WsProtocol(wss, tracker, broadcast, { lockManager, messageBus, approvalRules });
+// Initialiser le protocole WebSocket et câbler la référence pour le filtrage (#54)
+wsProtocol = new WsProtocol(wss, tracker, broadcast, { lockManager, messageBus, approvalRules });
 
 app.locals.broadcast  = broadcast;
 app.locals.supervisor = supervisor;
@@ -160,17 +183,87 @@ app.use('/api/squads', squadRoutes);
 app.use('/api/squad-templates', squadTemplateRoutes);
 
 app.get('/api/health', (req, res) => {
+  const mem = process.memoryUsage();
   res.json({
     status: 'ok',
     uptime: process.uptime(),
     sessions: tracker.getAllSessions().length,
     agents: supervisor.getAllAgents().length,
     connections: wsProtocol.getStats(),
+    memory: {
+      heapUsedMB: Math.round(mem.heapUsed / 1024 / 1024),
+      heapTotalMB: Math.round(mem.heapTotal / 1024 / 1024),
+      rssMB: Math.round(mem.rss / 1024 / 1024),
+    },
   });
+});
+
+// Purge des données anciennes (#45)
+app.post('/api/admin/purge', (req, res) => {
+  const { daysTerminals = 7, daysSquads = 30 } = req.body || {};
+  const now = Date.now();
+  const msTerminals = daysTerminals * 86400000;
+  const msSquads    = daysSquads   * 86400000;
+
+  // Purger terminaux exited anciens du store (stockés comme tableau)
+  const terminalsList = store.get('terminals') || [];
+  let purgedT = 0;
+  const filteredTerminals = terminalsList.filter((t) => {
+    if (t.status === 'exited' && t.exitedAt && (now - new Date(t.exitedAt).getTime()) > msTerminals) {
+      purgedT++;
+      return false;
+    }
+    return true;
+  });
+  if (purgedT > 0) store.set('terminals', filteredTerminals);
+
+  // Purger squads terminés anciens
+  const squads = store.get('squads') || [];
+  const filteredSquads = squads.filter((s) => {
+    if (['completed', 'cancelled', 'partial'].includes(s.status) && s.completedAt) {
+      return (now - new Date(s.completedAt).getTime()) <= msSquads;
+    }
+    return true;
+  });
+  const purgedS = squads.length - filteredSquads.length;
+  if (purgedS > 0) store.set('squads', filteredSquads);
+
+  res.json({ purgedTerminals: purgedT, purgedSquads: purgedS });
+});
+
+// Nettoyage des worktrees orphelins (#85)
+app.post('/api/admin/cleanup-worktrees', (req, res) => {
+  const wm = app.locals.worktreeManager;
+  if (!wm) return res.status(400).json({ error: 'Worktrees non disponibles' });
+  try {
+    const removed = wm.cleanupOrphaned ? wm.cleanupOrphaned() : 0;
+    res.json({ removed });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.get('/api/settings', (req, res) => {
   res.json(settings);
+});
+
+// Mettre à jour les settings depuis l'UI (#25)
+app.put('/api/settings', (req, res) => {
+  try {
+    const allowed = ['defaultModel', 'maxTerminals', 'heartbeatInterval', 'maxEvents', 'worktreeBase', 'dangerousModeDefault', 'showConflicts', 'showAnalytics', 'showJournal'];
+    const updates = {};
+    for (const key of allowed) {
+      if (req.body[key] !== undefined) updates[key] = req.body[key];
+    }
+    Object.assign(settings, updates);
+    app.locals.settings = settings;
+    const dir = path.dirname(settingsPath);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf-8');
+    res.json(settings);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Nettoyage periodique des sessions inactives (toutes les 60s)
@@ -178,10 +271,16 @@ let _staleCheckTimer = setInterval(() => {
   tracker.cleanupStale(120000); // 2 min sans mise a jour = stale
 }, 60000);
 
+// Persistance périodique de l'état des terminaux (#86 — survit au SIGKILL)
+let _persistTimer = setInterval(() => {
+  terminalManager.persistState();
+}, 30000);
+
 // Sauvegarder les donnees avant l'arret
 function gracefulShutdown() {
   console.log('Sauvegarde des donnees avant arret...');
   clearInterval(_staleCheckTimer);
+  clearInterval(_persistTimer);
   _staleCheckTimer = null;
   squadManager.destroy();
   terminalManager.persistState(); // Sauvegarder les sessions actives avant de les tuer

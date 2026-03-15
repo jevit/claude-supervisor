@@ -1,5 +1,20 @@
 const crypto = require('crypto');
 
+// Constantes hissées au niveau module — construites une seule fois
+const SIMILARITY_STOP_WORDS = new Set([
+  'the', 'this', 'that', 'with', 'from', 'for', 'and', 'but', 'not', 'are', 'was',
+  'will', 'can', 'has', 'have', 'been', 'into', 'all', 'new', 'use', 'add', 'get',
+  'les', 'des', 'une', 'dans', 'par', 'sur', 'pour', 'avec', 'est', 'qui',
+  'que', 'ces', 'ses', 'son', 'mon', 'pas', 'plus', 'tout', 'bien',
+  'code', 'file', 'files', 'test', 'tests', 'src', 'app', 'update', 'fix', 'bug',
+]);
+const SIMILARITY_SPLIT_RE = /[\s/.,;:!?()[\]{}'"]+/;
+function _normalizeWord(w) { return w.replace(/s$/, '').replace(/ing$/, '').replace(/ed$/, ''); }
+function _tokenize(task) {
+  const words = task.toLowerCase().split(SIMILARITY_SPLIT_RE);
+  return new Set(words.filter((w) => w.length > 2 && !SIMILARITY_STOP_WORDS.has(w)).map(_normalizeWord));
+}
+
 /**
  * ConflictDetector - Detection proactive de conflits entre sessions.
  *
@@ -15,6 +30,8 @@ class ConflictDetector {
     this.store = store;
     // Map conflictId -> conflict
     this.conflicts = new Map();
+    // Cache des tokens par texte de tâche — évite de retokenizer les mêmes tasks à chaque analyze()
+    this._tokenCache = new Map();
 
     // Restaurer les conflits persistes
     if (this.store) {
@@ -86,7 +103,7 @@ class ConflictDetector {
         const b = sessions[j];
         if (a.currentTask && b.currentTask) {
           const similarity = this._taskSimilarity(a.currentTask, b.currentTask);
-          if (similarity > 0.5) {
+          if (similarity > 0.65) { // seuil augmenté + stop-words pour reduire les faux positifs (#18)
             const id = `task:${[a.id, b.id].sort().join(':')}`;
             currentConflicts.set(id, {
               id,
@@ -124,12 +141,20 @@ class ConflictDetector {
   }
 
   /**
-   * Calcule une similarite simple entre deux descriptions de taches.
-   * Retourne un score entre 0 et 1.
+   * Calcule une similarite entre deux descriptions de taches (#18).
+   * Stop-words, tokenization et regex compilés au niveau module — pas de recréation par appel.
+   * Token cache par texte de tâche — évite de retokenizer les mêmes tâches inchangées.
    */
   _taskSimilarity(taskA, taskB) {
-    const wordsA = new Set(taskA.toLowerCase().split(/\s+/).filter((w) => w.length > 2));
-    const wordsB = new Set(taskB.toLowerCase().split(/\s+/).filter((w) => w.length > 2));
+    if (!this._tokenCache.has(taskA)) this._tokenCache.set(taskA, _tokenize(taskA));
+    if (!this._tokenCache.has(taskB)) this._tokenCache.set(taskB, _tokenize(taskB));
+    // Éviter une croissance infinie du cache (garde les 200 dernières entrées)
+    if (this._tokenCache.size > 200) {
+      const oldest = this._tokenCache.keys().next().value;
+      this._tokenCache.delete(oldest);
+    }
+    const wordsA = this._tokenCache.get(taskA);
+    const wordsB = this._tokenCache.get(taskB);
     if (wordsA.size === 0 || wordsB.size === 0) return 0;
     let common = 0;
     for (const w of wordsA) {

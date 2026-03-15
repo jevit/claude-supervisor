@@ -18,4 +18,10 @@ router.get('/types', (req, res) => {
   res.json(eventLog.getEventTypes());
 });
 
+// Sources distinctes (pour le filtre par session/terminal, #31)
+// Utilise l'index incrémental de EventLog — O(1) au lieu de O(n)
+router.get('/sources', (req, res) => {
+  res.json(req.app.locals.eventLog.getSources());
+});
+
 module.exports = router;

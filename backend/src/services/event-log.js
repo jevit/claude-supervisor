@@ -11,12 +11,19 @@ class EventLog {
     this.store = store;
     this.maxEvents = options.maxEvents || 500;
     this.events = [];
+    // Index incrémentaux — évitent de recalculer sur chaque GET
+    this._sources = new Set();
+    this._types   = new Set();
 
     // Restaurer les evenements persistes
     if (this.store) {
       const saved = this.store.get('events');
       if (saved && Array.isArray(saved)) {
         this.events = saved;
+        for (const e of saved) {
+          if (e.source) this._sources.add(e.source);
+          if (e.type)   this._types.add(e.type);
+        }
         console.log(`EventLog: ${saved.length} evenement(s) restaure(s)`);
       }
     }
@@ -38,6 +45,8 @@ class EventLog {
     };
 
     this.events.push(event);
+    this._sources.add(source);
+    this._types.add(type);
 
     // Limiter la taille du journal
     if (this.events.length > this.maxEvents) {
@@ -113,29 +122,36 @@ class EventLog {
 
   /**
    * Recupere les evenements avec filtres optionnels.
+   * Single-pass depuis la fin : évite 2 filter() + slice() + reverse().
    */
   getEvents(filters = {}) {
-    let result = [...this.events];
-
-    if (filters.type) {
-      result = result.filter((e) => e.type === filters.type);
-    }
-    if (filters.source) {
-      result = result.filter((e) => e.source === filters.source);
-    }
-
-    // Ordre chronologique inverse (plus recent en premier)
-    result.reverse();
-
     const limit = filters.limit ? parseInt(filters.limit, 10) : 100;
-    return result.slice(0, limit);
+    const typeFilter   = filters.type   || null;
+    const sourceFilter = filters.source || null;
+    const result = [];
+    for (let i = this.events.length - 1; i >= 0 && result.length < limit; i--) {
+      const e = this.events[i];
+      if (typeFilter   && e.type   !== typeFilter)   continue;
+      if (sourceFilter && e.source !== sourceFilter) continue;
+      result.push(e);
+    }
+    return result;
   }
 
   /**
    * Retourne les types d'evenements distincts (pour les filtres frontend).
+   * Index maintenu en temps réel — O(1).
    */
   getEventTypes() {
-    return [...new Set(this.events.map((e) => e.type))];
+    return Array.from(this._types);
+  }
+
+  /**
+   * Retourne les sources distinctes (pour les filtres frontend).
+   * Index maintenu en temps réel — O(1).
+   */
+  getSources() {
+    return Array.from(this._sources).filter(Boolean).sort();
   }
 }
 

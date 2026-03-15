@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useWebSocket } from '../services/websocket';
 import {
   ResponsiveContainer,
@@ -56,7 +56,7 @@ function KpiCard({ value, label, color = C.accent, sub }) {
 }
 
 /* ── Utilitaire durée ────────────────────────────────────────────── */
-function fmtDuration(minutes) {
+export function fmtDuration(minutes) {
   if (!minutes || minutes < 1) return '< 1m';
   const h = Math.floor(minutes / 60);
   const m = Math.round(minutes % 60);
@@ -78,6 +78,14 @@ function ChartCard({ title, children, empty }) {
 /* ════════════════════════════════════════════════════════════════════
    Page principale
    ════════════════════════════════════════════════════════════════════ */
+// Périodes disponibles pour le filtre (#64)
+const PERIODS = [
+  { label: '24h',  ms: 86400000 },
+  { label: '7j',   ms: 7 * 86400000 },
+  { label: '30j',  ms: 30 * 86400000 },
+  { label: 'Tout', ms: Infinity },
+];
+
 export default function Analytics() {
   const [sessions,     setSessions]     = useState([]);
   const [timeline,     setTimeline]     = useState([]);
@@ -85,6 +93,9 @@ export default function Analytics() {
   const [squads,       setSquads]       = useState([]);
   const [terminals,    setTerminals]    = useState([]);
   const [loading,      setLoading]      = useState(true);
+  const [period,       setPeriod]       = useState(PERIODS[3]); // Tout par défaut (#64)
+
+  const debounceRef = useRef(null);
 
   const fetchAll = useCallback(() => {
     Promise.all([
@@ -105,108 +116,169 @@ export default function Analytics() {
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
+  // Nettoyage du timer debounce au démontage
+  useEffect(() => () => clearTimeout(debounceRef.current), []);
+
+  // Debounce 2s pour éviter les 5 requêtes en rafale (#28)
   useWebSocket(useCallback((event) => {
-    if (event.startsWith('session:') || event.startsWith('squad:') || event.startsWith('terminal:'))
-      fetchAll();
+    if (event.startsWith('session:') || event.startsWith('squad:') || event.startsWith('terminal:')) {
+      clearTimeout(debounceRef.current);
+      debounceRef.current = setTimeout(fetchAll, 2000);
+    }
   }, [fetchAll]));
 
   if (loading) return <div className="card analytics-loading">Chargement...</div>;
 
-  /* ── Sessions ──────────────────────────────────────────────────── */
-  const statusCounts = {};
-  for (const s of sessions) statusCounts[s.status] = (statusCounts[s.status] || 0) + 1;
+  /* ── Données dérivées — recalculées uniquement si les données ou la période changent ── */
+  const {
+    now,
+    filteredSessions, filteredTerminals, filteredSquads,
+    statusCounts, termExited, termDurations, avgTermDuration,
+    completedSquads, finishedSquads, squadCompletionRate, squadDurations, avgSquadDuration, avgAgentsPerSquad,
+    hcTotal, hcOk, hcRate,
+    hourActivityData, typeData, sessionActivityData, termDurationData, squadStatusData, squadDurationData,
+  } = useMemo(() => {
+    const now    = Date.now();
+    const cutoff = period.ms === Infinity ? 0 : now - period.ms;
+    const filteredSessions  = sessions.filter((s)  => !s.createdAt || new Date(s.createdAt).getTime() >= cutoff);
+    const filteredTimeline  = timeline.filter((ev) => !ev.timestamp || new Date(ev.timestamp).getTime() >= cutoff);
+    const filteredSquads    = squads.filter((s)   => !s.createdAt || new Date(s.createdAt).getTime() >= cutoff);
+    const filteredTerminals = terminals.filter((t) => !t.createdAt || new Date(t.createdAt).getTime() >= cutoff);
 
-  /* ── Terminaux ─────────────────────────────────────────────────── */
-  const termExited    = terminals.filter((t) => t.status === 'exited');
-  const termDurations = termExited
-    .filter((t) => t.exitedAt && t.createdAt)
-    .map((t) => (new Date(t.exitedAt) - new Date(t.createdAt)) / 60000);
-  const avgTermDuration = termDurations.length > 0
-    ? termDurations.reduce((a, b) => a + b, 0) / termDurations.length : 0;
+    /* Sessions */
+    const statusCounts = {};
+    for (const s of filteredSessions) statusCounts[s.status] = (statusCounts[s.status] || 0) + 1;
 
-  /* ── Squads ────────────────────────────────────────────────────── */
-  const completedSquads     = squads.filter((s) => s.status === 'completed').length;
-  const finishedSquads      = squads.filter((s) => ['completed', 'cancelled', 'partial'].includes(s.status)).length;
-  const squadCompletionRate = finishedSquads > 0 ? Math.round((completedSquads / finishedSquads) * 100) : null;
-  const squadDurations      = squads
-    .filter((s) => s.completedAt && s.createdAt)
-    .map((s) => (new Date(s.completedAt) - new Date(s.createdAt)) / 60000);
-  const avgSquadDuration = squadDurations.length > 0
-    ? squadDurations.reduce((a, b) => a + b, 0) / squadDurations.length : 0;
-  const avgAgentsPerSquad = squads.length > 0
-    ? (squads.reduce((s, sq) => s + (sq.members?.length || 0), 0) / squads.length).toFixed(1) : 0;
+    /* Terminaux */
+    const termExited    = filteredTerminals.filter((t) => t.status === 'exited');
+    const termDurations = termExited
+      .filter((t) => t.exitedAt && t.createdAt)
+      .map((t) => (new Date(t.exitedAt) - new Date(t.createdAt)) / 60000);
+    const avgTermDuration = termDurations.length > 0
+      ? termDurations.reduce((a, b) => a + b, 0) / termDurations.length : 0;
 
-  /* ── Health checks ─────────────────────────────────────────────── */
-  const hcTotal = healthChecks.length;
-  const hcOk    = healthChecks.filter((hc) => hc.lastResult?.success).length;
-  const hcRate  = hcTotal > 0 ? Math.round((hcOk / hcTotal) * 100) : null;
+    /* Squads */
+    const completedSquads     = filteredSquads.filter((s) => s.status === 'completed').length;
+    const finishedSquads      = filteredSquads.filter((s) => ['completed', 'cancelled', 'partial'].includes(s.status)).length;
+    const squadCompletionRate = finishedSquads > 0 ? Math.round((completedSquads / finishedSquads) * 100) : null;
+    const squadDurations      = filteredSquads
+      .filter((s) => s.completedAt && s.createdAt)
+      .map((s) => (new Date(s.completedAt) - new Date(s.createdAt)) / 60000);
+    const avgSquadDuration = squadDurations.length > 0
+      ? squadDurations.reduce((a, b) => a + b, 0) / squadDurations.length : 0;
+    const avgAgentsPerSquad = filteredSquads.length > 0
+      ? (filteredSquads.reduce((s, sq) => s + (sq.members?.length || 0), 0) / filteredSquads.length).toFixed(1) : 0;
 
-  /* ── Données graphiques ────────────────────────────────────────── */
-  const now = Date.now();
+    /* Health checks */
+    const hcTotal = healthChecks.length;
+    const hcOk    = healthChecks.filter((hc) => hc.lastResult?.success).length;
+    const hcRate  = hcTotal > 0 ? Math.round((hcOk / hcTotal) * 100) : null;
 
-  // Activité par heure (24h) — graphique vertical
-  const hourActivityData = Array.from({ length: 24 }, (_, h) => {
-    const count = timeline.filter((ev) => {
-      const age = now - new Date(ev.timestamp).getTime();
-      return age < 86400000 && new Date(ev.timestamp).getHours() === h;
-    }).length;
-    return { heure: `${String(h).padStart(2, '0')}h`, count };
-  });
+    /* Graphiques */
+    const hourActivityData = Array.from({ length: 24 }, (_, h) => {
+      const count = filteredTimeline.filter((ev) => {
+        const age = now - new Date(ev.timestamp).getTime();
+        return age < 86400000 && new Date(ev.timestamp).getHours() === h;
+      }).length;
+      return { heure: `${String(h).padStart(2, '0')}h`, count };
+    });
 
-  // Événements par type — top 10, horizontal
-  const typeCounts = {};
-  for (const ev of timeline) {
-    const type = (ev.event || ev.type || '').split(':')[0];
-    if (type) typeCounts[type] = (typeCounts[type] || 0) + 1;
-  }
-  const typeData = Object.entries(typeCounts)
-    .sort((a, b) => b[1] - a[1]).slice(0, 10)
-    .map(([type, count]) => ({ type, count }));
+    const typeCounts = {};
+    for (const ev of filteredTimeline) {
+      const type = (ev.event || ev.type || '').split(':')[0];
+      if (type) typeCounts[type] = (typeCounts[type] || 0) + 1;
+    }
+    const typeData = Object.entries(typeCounts)
+      .sort((a, b) => b[1] - a[1]).slice(0, 10)
+      .map(([type, count]) => ({ type, count }));
 
-  // Sessions les plus actives — horizontal
-  const sessionActivityData = sessions
-    .map((s) => ({ name: (s.name || s.id?.substring(0, 8) || '?').substring(0, 16), actions: s.history?.length || 0 }))
-    .sort((a, b) => b.actions - a.actions).slice(0, 8);
+    const sessionActivityData = filteredSessions
+      .map((s) => ({ name: (s.name || s.id?.substring(0, 8) || '?').substring(0, 16), actions: s.history?.length || 0 }))
+      .sort((a, b) => b.actions - a.actions).slice(0, 8);
 
-  // Durée terminaux — horizontal, top 8 par durée
-  const termDurationData = termExited
-    .filter((t) => t.exitedAt && t.createdAt)
-    .map((t) => ({
-      name: (t.name || t.id?.substring(0, 8) || '?').substring(0, 16),
-      minutes: Math.round((new Date(t.exitedAt) - new Date(t.createdAt)) / 60000),
-    }))
-    .sort((a, b) => b.minutes - a.minutes).slice(0, 8);
+    const termDurationData = termExited
+      .filter((t) => t.exitedAt && t.createdAt)
+      .map((t) => ({
+        name: (t.name || t.id?.substring(0, 8) || '?').substring(0, 16),
+        minutes: Math.round((new Date(t.exitedAt) - new Date(t.createdAt)) / 60000),
+      }))
+      .sort((a, b) => b.minutes - a.minutes).slice(0, 8);
 
-  // Squads par statut — Pie
-  const squadStatusData = Object.entries(
-    squads.reduce((acc, s) => { acc[s.status] = (acc[s.status] || 0) + 1; return acc; }, {})
-  ).map(([status, value]) => ({ name: status, value }));
+    const squadStatusData = Object.entries(
+      filteredSquads.reduce((acc, s) => { acc[s.status] = (acc[s.status] || 0) + 1; return acc; }, {})
+    ).map(([status, value]) => ({ name: status, value }));
 
-  // Durée squads complétés — horizontal
-  const squadDurationData = squads
-    .filter((s) => s.completedAt && s.createdAt)
-    .sort((a, b) => new Date(b.completedAt) - new Date(a.completedAt)).slice(0, 8)
-    .map((s) => ({
-      name: s.name.length > 14 ? s.name.substring(0, 14) + '…' : s.name,
-      minutes: Math.round((new Date(s.completedAt) - new Date(s.createdAt)) / 60000),
-    }));
+    const squadDurationData = filteredSquads
+      .filter((s) => s.completedAt && s.createdAt)
+      .sort((a, b) => new Date(b.completedAt) - new Date(a.completedAt)).slice(0, 8)
+      .map((s) => ({
+        name: s.name.length > 14 ? s.name.substring(0, 14) + '…' : s.name,
+        minutes: Math.round((new Date(s.completedAt) - new Date(s.createdAt)) / 60000),
+      }));
 
-  /* ── Axes Y (horizontal charts) ─────────────────────────────────── */
-  const yAxisProps = {
-    tick: { fill: C.text, fontSize: 11 },
-    width: 120,
-  };
-  const xAxisProps = {
-    tick: { fill: C.text, fontSize: 11 },
-  };
-  const gridProps = {
-    stroke: C.border, strokeDasharray: '3 3', vertical: false,
-  };
+    return {
+      now,
+      filteredSessions, filteredTerminals, filteredSquads,
+      statusCounts, termExited, termDurations, avgTermDuration,
+      completedSquads, finishedSquads, squadCompletionRate, squadDurations, avgSquadDuration, avgAgentsPerSquad,
+      hcTotal, hcOk, hcRate,
+      hourActivityData, typeData, sessionActivityData, termDurationData, squadStatusData, squadDurationData,
+    };
+  }, [sessions, timeline, squads, terminals, healthChecks, period]);
+
+  /* ── Props graphiques (statiques) ──────────────────────────────── */
+  const yAxisProps   = { tick: { fill: C.text, fontSize: 11 }, width: 120 };
+  const xAxisProps   = { tick: { fill: C.text, fontSize: 11 } };
+  const gridProps    = { stroke: C.border, strokeDasharray: '3 3', vertical: false };
   const tooltipStyle = { cursor: { fill: 'rgba(139,92,246,0.08)' } };
+
+  // Export CSV des terminaux (#66)
+  const exportCSV = () => {
+    const rows = [['Nom', 'Statut', 'Modèle', 'Durée (min)', 'Lancé le']];
+    [...terminals].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).forEach((t) => {
+      const durMin = t.exitedAt && t.createdAt
+        ? Math.round((new Date(t.exitedAt) - new Date(t.createdAt)) / 60000)
+        : t.createdAt ? Math.round((now - new Date(t.createdAt)) / 60000) : '';
+      rows.push([t.name || t.id?.substring(0, 8), t.status, t.model || '', durMin, t.createdAt ? new Date(t.createdAt).toLocaleString('fr-FR') : '']);
+    });
+    const csv = rows.map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+    a.download = `analytics-${new Date().toISOString().slice(0, 10)}.csv`; a.click();
+    URL.revokeObjectURL(a.href);
+  };
+
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
   return (
     <div className="analytics-page">
-      <h2 className="analytics-header">Analytics & KPIs</h2>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+        <h2 style={{ margin: 0 }}>Analytics & KPIs</h2>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {/* Sélecteur de période (#64) */}
+          <div style={{ display: 'flex', gap: 4 }}>
+            {PERIODS.map((p) => (
+              <button
+                key={p.label}
+                onClick={() => setPeriod(p)}
+                style={{
+                  background: period.label === p.label ? 'rgba(139,92,246,0.3)' : 'rgba(139,92,246,0.08)',
+                  border: `1px solid ${period.label === p.label ? 'rgba(139,92,246,0.6)' : 'rgba(139,92,246,0.2)'}`,
+                  borderRadius: 5, color: period.label === p.label ? '#c4b5fd' : '#8b5cf6',
+                  cursor: 'pointer', fontSize: 11, fontWeight: 600, padding: '4px 9px',
+                }}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+          {terminals.length > 0 && (
+            <button onClick={exportCSV} style={{ background: 'rgba(139,92,246,0.15)', border: '1px solid rgba(139,92,246,0.3)', borderRadius: 6, color: '#8b5cf6', cursor: 'pointer', fontSize: 12, fontWeight: 600, padding: '6px 12px' }}>
+              📥 Exporter CSV
+            </button>
+          )}
+        </div>
+      </div>
 
       {/* ── KPIs sessions/terminaux ──────────────────────────────── */}
       <div className="kpi-section-title">Sessions & Terminaux</div>
@@ -229,7 +301,7 @@ export default function Analytics() {
         <KpiCard
           value={squadCompletionRate !== null ? `${squadCompletionRate}%` : '—'}
           label="Taux de complétion"
-          color={squadCompletionRate >= 80 ? C.success : squadCompletionRate >= 50 ? C.warning : C.error}
+          color={squadCompletionRate === null ? C.muted : squadCompletionRate >= 80 ? C.success : squadCompletionRate >= 50 ? C.warning : C.error}
           sub={`${completedSquads}/${finishedSquads} terminé(s)`}
         />
         <KpiCard
@@ -262,7 +334,7 @@ export default function Analytics() {
       <div className="charts-grid" style={{ marginTop: 28 }}>
 
         {/* Activité par heure */}
-        <ChartCard title="Activité par heure (24h)">
+        <ChartCard title={`Activité par heure — 24h (${tz})`}>
           <ResponsiveContainer width="100%" height={200}>
             <BarChart data={hourActivityData} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
               <CartesianGrid {...gridProps} />
@@ -375,9 +447,20 @@ export default function Analytics() {
               {healthChecks.map((hc, i) => {
                 const ok = hc.lastResult?.success;
                 const status = hc.lastResult ? (ok ? 'OK' : 'FAIL') : '—';
+                // Sparkline d'historique (#65) — 20 dernières exécutions
+                const hist = hc.history || [];
                 return (
                   <div key={i} className="hc-row">
                     <span className="hc-name">{hc.name}</span>
+                    {/* Sparkline succès/échec */}
+                    {hist.length > 0 && (
+                      <svg width={hist.length * 5} height={14} style={{ flexShrink: 0 }}>
+                        {hist.map((h, j) => (
+                          <rect key={j} x={j * 5} y={h.success ? 2 : 6} width={4} height={h.success ? 12 : 8}
+                            fill={h.success ? C.success : C.error} rx={1} opacity={0.8} />
+                        ))}
+                      </svg>
+                    )}
                     <span className="hc-badge" style={{
                       background: ok ? 'rgba(16,185,129,0.15)' : hc.lastResult ? 'rgba(239,68,68,0.15)' : 'rgba(100,116,139,0.15)',
                       color: ok ? C.success : hc.lastResult ? C.error : C.muted,

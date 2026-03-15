@@ -75,6 +75,22 @@ class WsProtocol {
       case 'disconnect':
         this._handleDisconnect(ws);
         break;
+      // Subscription aux terminal:output (#54) — le client s'abonne à un terminal spécifique
+      case 'subscribe': {
+        const client = this.clients.get(ws);
+        if (client) {
+          if (!client.subscribedTerminals) client.subscribedTerminals = new Set();
+          if (data?.terminalId) client.subscribedTerminals.add(data.terminalId);
+        }
+        break;
+      }
+      case 'unsubscribe': {
+        const client = this.clients.get(ws);
+        if (client?.subscribedTerminals && data?.terminalId) {
+          client.subscribedTerminals.delete(data.terminalId);
+        }
+        break;
+      }
       default:
         this._sendTo(ws, 'error', { message: `Unknown message type: ${type}` });
     }
@@ -90,6 +106,7 @@ class WsProtocol {
     }
 
     const client = this.clients.get(ws);
+    if (!client) return; // Déconnexion entre reception et traitement
     client.type = 'terminal';
     client.sessionId = data.sessionId;
 
@@ -279,11 +296,24 @@ class WsProtocol {
 
   /**
    * Envoie un message a un client specifique.
+   * WebSocket.OPEN === 1 — constante nommée pour éviter les magic numbers (#48)
    */
   _sendTo(ws, event, data) {
-    if (ws.readyState === 1) {
+    if (ws.readyState === ws.OPEN) {
       ws.send(JSON.stringify({ event, data, timestamp: new Date().toISOString() }));
     }
+  }
+
+  /**
+   * Vérifie si un client WS est abonné à un terminal donné (#54).
+   * Un client sans abonnements explicites reçoit tout (comportement par défaut).
+   * Un client avec des abonnements ne reçoit que ses terminaux souscrits.
+   */
+  isSubscribedTo(ws, terminalId) {
+    const client = this.clients.get(ws);
+    if (!client) return false;
+    if (!client.subscribedTerminals || client.subscribedTerminals.size === 0) return true; // pas d'abonnement = tout recevoir
+    return client.subscribedTerminals.has(terminalId);
   }
 
   /**

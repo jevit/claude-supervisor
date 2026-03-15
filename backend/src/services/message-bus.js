@@ -35,12 +35,14 @@ class MessageBus {
    * @param {object} payload - { type, content }
    */
   send(from, to, payload) {
+    // Accepter une chaine comme contenu (rétrocompatibilité)
+    const p = typeof payload === 'string' ? { type: 'info', content: payload } : (payload || {});
     const message = {
       id: crypto.randomUUID(),
       from,
       to,
-      type: payload.type || 'info',
-      content: payload.content || '',
+      type: p.type || 'info',
+      content: p.content || '',
       read: false,
       timestamp: new Date().toISOString(),
     };

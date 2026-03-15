@@ -1,13 +1,15 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useWebSocket } from '../services/websocket';
+import { useToast } from '../components/Toast';
 
 /**
  * Historique d'une entrée — versions antérieures avec restauration.
  */
-function HistoryPanel({ entryKey, onRestored }) {
-  const [history, setHistory]   = useState([]);
-  const [loading, setLoading]   = useState(true);
+function HistoryPanel({ entryKey, onRestored, addToast }) {
+  const [history, setHistory]     = useState([]);
+  const [loading, setLoading]     = useState(true);
   const [restoring, setRestoring] = useState(null);
+  const [confirmIdx, setConfirmIdx] = useState(null); // index en attente de confirmation
 
   useEffect(() => {
     fetch(`/api/context/${encodeURIComponent(entryKey)}/history`)
@@ -17,12 +19,18 @@ function HistoryPanel({ entryKey, onRestored }) {
   }, [entryKey]);
 
   const handleRestore = async (idx) => {
+    setConfirmIdx(null);
     setRestoring(idx);
-    await fetch(`/api/context/${encodeURIComponent(entryKey)}/restore`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ versionIndex: idx }),
-    });
+    try {
+      await fetch(`/api/context/${encodeURIComponent(entryKey)}/restore`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ versionIndex: idx }),
+      });
+      addToast?.('✓ Version restaurée', 'success');
+    } catch {
+      addToast?.('Erreur lors de la restauration', 'error');
+    }
     setRestoring(null);
     onRestored();
   };
@@ -42,13 +50,25 @@ function HistoryPanel({ entryKey, onRestored }) {
               <span className="history-date">{new Date(v.updatedAt).toLocaleString('fr-FR')}</span>
             </div>
             <p className="history-value">{v.value}</p>
-            <button
-              className="history-restore-btn"
-              onClick={() => handleRestore(realIdx)}
-              disabled={restoring === realIdx}
-            >
-              {restoring === realIdx ? '...' : '↩ Restaurer'}
-            </button>
+            {confirmIdx === realIdx ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ fontSize: 11, color: '#f59e0b' }}>Confirmer ?</span>
+                <button
+                  className="history-restore-btn"
+                  onClick={() => handleRestore(realIdx)}
+                  style={{ borderColor: 'rgba(239,68,68,0.5)', color: '#ef4444' }}
+                >Oui</button>
+                <button className="history-restore-btn" onClick={() => setConfirmIdx(null)}>Non</button>
+              </div>
+            ) : (
+              <button
+                className="history-restore-btn"
+                onClick={() => setConfirmIdx(realIdx)}
+                disabled={restoring === realIdx}
+              >
+                {restoring === realIdx ? '...' : '↩ Restaurer'}
+              </button>
+            )}
           </div>
         );
       })}
@@ -59,8 +79,29 @@ function HistoryPanel({ entryKey, onRestored }) {
 /**
  * Carte d'une entrée de contexte.
  */
-function ContextEntry({ entry, onDelete, onUpdated }) {
+function ContextEntry({ entry, onDelete, onUpdated, addToast }) {
   const [showHistory, setShowHistory] = useState(false);
+  const [editing,     setEditing]     = useState(false);   // mode édition inline (#24)
+  const [editValue,   setEditValue]   = useState(entry.value);
+  const [saving,      setSaving]      = useState(false);
+
+  // Sync editValue si la valeur distante change et qu'on n'est pas en train d'éditer
+  useEffect(() => {
+    if (!editing) setEditValue(entry.value);
+  }, [entry.value, editing]);
+
+  const handleSave = async () => {
+    if (!editValue.trim() || editValue === entry.value) { setEditing(false); return; }
+    setSaving(true);
+    await fetch('/api/context', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: entry.key, value: editValue.trim(), author: 'dashboard' }),
+    }).catch(() => {});
+    setSaving(false);
+    setEditing(false);
+    onUpdated();
+  };
 
   return (
     <div className="ctx-entry card">
@@ -77,27 +118,51 @@ function ContextEntry({ entry, onDelete, onUpdated }) {
             </button>
           )}
         </div>
-        <button className="btn-small btn-danger" onClick={() => onDelete(entry.key)}>Supprimer</button>
+        <div style={{ display: 'flex', gap: 6 }}>
+          {!editing && (
+            <button className="btn-small" onClick={() => { setEditValue(entry.value); setEditing(true); }} title="Modifier la valeur">✏ Modifier</button>
+          )}
+          <button className="btn-small btn-danger" onClick={() => onDelete(entry.key)}>Supprimer</button>
+        </div>
       </div>
-      <p className="ctx-value">{entry.value}</p>
+      {editing ? (
+        <div style={{ marginTop: 8 }}>
+          <textarea
+            autoFocus
+            value={editValue}
+            onChange={(e) => setEditValue(e.target.value)}
+            rows={Math.max(3, editValue.split('\n').length)}
+            style={{ width: '100%', boxSizing: 'border-box', background: 'var(--bg-primary)', border: '1px solid var(--accent)', borderRadius: 5, padding: '6px 8px', color: 'var(--text-primary)', fontSize: 13, fontFamily: 'monospace', resize: 'vertical' }}
+          />
+          <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+            <button className="btn-primary btn-small" onClick={handleSave} disabled={saving}>{saving ? '…' : '✓ Enregistrer'}</button>
+            <button className="btn-small" onClick={() => setEditing(false)}>Annuler</button>
+          </div>
+        </div>
+      ) : (
+        <p className="ctx-value">{entry.value}</p>
+      )}
       <div className="ctx-meta">
         <span>Par : {entry.author}</span>
         <span>{new Date(entry.updatedAt).toLocaleString('fr-FR')}</span>
       </div>
       {showHistory && (
-        <HistoryPanel entryKey={entry.key} onRestored={() => { setShowHistory(false); onUpdated(); }} />
+        <HistoryPanel entryKey={entry.key} addToast={addToast} onRestored={() => { setShowHistory(false); onUpdated(); }} />
       )}
     </div>
   );
 }
 
 export default function SharedContext() {
+  const addToast = useToast();
   const [entries, setEntries]       = useState([]);
   const [namespaces, setNamespaces] = useState([]);
   const [activeNs, setActiveNs]     = useState(null); // null = tous
   const [loading, setLoading]       = useState(true);
   const [showAdd, setShowAdd]       = useState(false);
   const [newEntry, setNewEntry]     = useState({ key: '', value: '' });
+  const [ctxFilter, setCtxFilter]   = useState(''); // filtre texte clé/valeur
+  const [confirmNs, setConfirmNs]   = useState(null); // namespace en attente de confirmation (#43)
 
   const fetchEntries = useCallback(() => {
     const url = activeNs ? `/api/context?namespace=${encodeURIComponent(activeNs)}` : '/api/context';
@@ -127,22 +192,44 @@ export default function SharedContext() {
       setNewEntry({ key: '', value: '' });
       setShowAdd(false);
       fetchEntries();
-    }).catch(console.error);
+      addToast(`✓ Entrée "${newEntry.key.trim()}" ajoutée`, 'success');
+    }).catch(() => addToast('Erreur lors de l\'ajout', 'error'));
   };
 
   const handleDelete = (key) => {
     fetch(`/api/context/${encodeURIComponent(key)}`, { method: 'DELETE' })
-      .then(() => fetchEntries())
-      .catch(console.error);
+      .then(() => { fetchEntries(); addToast(`✓ Entrée "${key}" supprimée`, 'success'); })
+      .catch(() => addToast('Erreur lors de la suppression', 'error'));
   };
 
-  // Grouper les entries par namespace pour l'affichage "Tous"
-  const grouped = entries.reduce((acc, e) => {
-    const ns = e.namespace || 'général';
-    if (!acc[ns]) acc[ns] = [];
-    acc[ns].push(e);
-    return acc;
-  }, {});
+  const handleDeleteNamespace = (ns) => {
+    setConfirmNs(ns); // affiche la confirmation inline (#43)
+  };
+
+  const confirmDeleteNamespace = () => {
+    if (!confirmNs) return;
+    const ns = confirmNs;
+    fetch(`/api/context/namespace/${encodeURIComponent(ns)}`, { method: 'DELETE' })
+      .then(() => { setConfirmNs(null); fetchEntries(); addToast(`✓ Namespace "${ns}" supprimé`, 'success'); })
+      .catch(() => addToast('Erreur lors de la suppression', 'error'));
+  };
+
+  // Filtrer et grouper — recalculé uniquement si entries ou ctxFilter changent
+  const { filteredEntries, grouped } = useMemo(() => {
+    const filteredEntries = ctxFilter
+      ? entries.filter((e) => {
+          const q = ctxFilter.toLowerCase();
+          return e.key.toLowerCase().includes(q) || String(e.value ?? '').toLowerCase().includes(q);
+        })
+      : entries;
+    const grouped = filteredEntries.reduce((acc, e) => {
+      const ns = e.namespace || 'général';
+      if (!acc[ns]) acc[ns] = [];
+      acc[ns].push(e);
+      return acc;
+    }, {});
+    return { filteredEntries, grouped };
+  }, [entries, ctxFilter]);
 
   const totalCount = namespaces.reduce((s, n) => s + n.count, 0);
 
@@ -190,10 +277,53 @@ export default function SharedContext() {
               )}
             </div>
           </div>
-          <button className="btn-primary" onClick={() => setShowAdd(!showAdd)}>
-            {showAdd ? 'Annuler' : '+ Ajouter'}
-          </button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            {activeNs && entries.length > 0 && (
+              confirmNs === activeNs ? (
+                // Confirmation inline (#43) — remplace window.confirm
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', borderRadius: 6, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)' }}>
+                  <span style={{ fontSize: 12, color: '#ef4444' }}>Supprimer tout le namespace "{activeNs}" ?</span>
+                  <button onClick={confirmDeleteNamespace} style={{ background: '#ef4444', border: 'none', borderRadius: 4, color: 'white', cursor: 'pointer', fontSize: 12, fontWeight: 700, padding: '3px 10px' }}>Oui</button>
+                  <button onClick={() => setConfirmNs(null)} style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 12, padding: '3px 10px' }}>Non</button>
+                </div>
+              ) : (
+                <button
+                  className="btn-small btn-danger"
+                  style={{ padding: '8px 14px', fontSize: 13 }}
+                  onClick={() => handleDeleteNamespace(activeNs)}
+                >
+                  🗑 Vider le namespace
+                </button>
+              )
+            )}
+            <button className="btn-primary" onClick={() => setShowAdd(!showAdd)}>
+              {showAdd ? 'Annuler' : '+ Ajouter'}
+            </button>
+          </div>
         </div>
+
+        {/* Filtre clé/valeur (#23) */}
+        {entries.length > 2 && (
+          <div style={{ marginBottom: 12, position: 'relative' }}>
+            <input
+              value={ctxFilter}
+              onChange={(e) => setCtxFilter(e.target.value)}
+              placeholder="🔍 Filtrer par clé ou valeur…"
+              style={{
+                width: '100%', boxSizing: 'border-box',
+                background: 'var(--bg-primary)', border: `1px solid ${ctxFilter ? 'var(--accent)' : 'var(--border)'}`,
+                borderRadius: 6, padding: '6px 28px 6px 10px', color: 'var(--text-primary)',
+                fontSize: 13, outline: 'none',
+              }}
+            />
+            {ctxFilter && (
+              <button onClick={() => setCtxFilter('')}
+                style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 14, padding: 0 }}>
+                ✕
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Aide namespaces */}
         <div className="ns-hint">
@@ -232,18 +362,25 @@ export default function SharedContext() {
         ) : activeNs ? (
           // Vue filtrée : liste plate
           entries.map((entry) => (
-            <ContextEntry key={entry.key} entry={entry} onDelete={handleDelete} onUpdated={fetchEntries} />
+            <ContextEntry key={entry.key} entry={entry} onDelete={handleDelete} onUpdated={fetchEntries} addToast={addToast} />
           ))
         ) : (
           // Vue globale : groupée par namespace
           Object.entries(grouped).map(([ns, list]) => (
             <div key={ns} style={{ marginBottom: 20 }}>
-              <div className="ns-group-header" onClick={() => setActiveNs(ns)}>
-                <span className="ns-group-name">{ns}</span>
+              <div className="ns-group-header">
+                <span className="ns-group-name" onClick={() => setActiveNs(ns)} style={{ cursor: 'pointer', flex: 1 }}>{ns}</span>
                 <span className="ns-group-count">{list.length}</span>
+                <button
+                  className="ns-clear-btn"
+                  onClick={(e) => { e.stopPropagation(); handleDeleteNamespace(ns); }}
+                  title={`Supprimer tout le namespace "${ns}"`}
+                >
+                  🗑 Vider
+                </button>
               </div>
               {list.map((entry) => (
-                <ContextEntry key={entry.key} entry={entry} onDelete={handleDelete} onUpdated={fetchEntries} />
+                <ContextEntry key={entry.key} entry={entry} onDelete={handleDelete} onUpdated={fetchEntries} addToast={addToast} />
               ))}
             </div>
           ))
@@ -261,8 +398,10 @@ export default function SharedContext() {
         .ns-count { font-size: 11px; background: var(--bg-primary); border-radius: 8px; padding: 1px 7px; font-weight: 600; }
         .ns-hint { font-size: 12px; color: var(--text-secondary); background: var(--bg-secondary); border-radius: 6px; padding: 8px 12px; margin-bottom: 14px; }
         .ns-hint code { color: var(--accent); font-family: monospace; background: rgba(139,92,246,0.1); padding: 1px 4px; border-radius: 3px; }
-        .ns-group-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; cursor: pointer; }
+        .ns-group-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
         .ns-group-header:hover .ns-group-name { color: var(--accent); }
+        .ns-clear-btn { background: none; border: 1px solid var(--border); border-radius: 5px; padding: 2px 8px; font-size: 11px; cursor: pointer; color: var(--text-secondary); white-space: nowrap; }
+        .ns-clear-btn:hover { border-color: var(--error, #ef4444); color: var(--error, #ef4444); }
         .ns-group-name { font-size: 13px; font-weight: 700; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; }
         .ns-group-count { font-size: 11px; color: var(--text-secondary); background: var(--bg-secondary); border-radius: 8px; padding: 1px 7px; }
         .ctx-form { display: flex; flex-direction: column; gap: 12px; }
