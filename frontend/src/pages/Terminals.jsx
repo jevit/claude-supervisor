@@ -371,9 +371,9 @@ function TerminalView({ terminalId, terminalName, terminalDirectory, terminalSta
     resizeObserver.observe(containerRef.current);
 
     /* ── Replay du buffer ─────────────────────────────────────── */
-    // Retourne vrai si la chaîne contient du texte visible (hors séquences ANSI)
-    const hasVisibleText = (s) => s.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '').replace(/\x1b\][^\x07]*\x07/g, '').replace(/[\r\n]/g, '').trim().length > 0;
-
+    // Le ⏳ est affiché en overlay React (pas dans xterm) pour ne pas polluer le buffer terminal.
+    // Écrire du texte dans xterm avant que Claude Code démarre corrompait le curseur et bloquait
+    // l'entrée utilisateur (conflit avec les séquences ANSI d'initialisation de Claude Code).
     const replayBuffer = async () => {
       if (destroyed) return; // variable locale — immunisé contre le double-mount StrictMode
       if (isReplayingRef.current) return; // éviter les replays concurrents
@@ -381,51 +381,43 @@ function TerminalView({ terminalId, terminalName, terminalDirectory, terminalSta
       wsMsgQueueRef.current  = [];
       setReplaying(true);
 
-      // Indicateur immédiat : affiché avant même que le fetch ne revienne
-      // Sera effacé par xterm.reset() si le buffer a du contenu visible
-      try { xterm.write('\r\n\x1b[90m  ⏳ Démarrage de Claude Code…\x1b[0m\r\n'); } catch {}
+      // fit() avant reset() pour que xterm connaisse ses dimensions réelles dès le départ
+      // (sans ça, reset() opère à 80×24 par défaut et le canvas n'est pas à la bonne taille)
+      try { fitAddon.fit(); } catch {}
+      try { xterm.reset(); } catch {}
 
-      let hasOutput = false;
       try {
         const res  = await fetch(`/api/terminals/${terminalId}/output?last=50000`);
         const data = await res.json();
-        if (!destroyed && data.output && hasVisibleText(data.output)) {
-          hasOutput = true;
-          xterm.reset();             // repart d'un état propre (efface le ⏳)
-          xterm.write(data.output);  // rejoue tout le buffer
+        if (!destroyed && data.output) {
+          xterm.write(data.output);
           xterm.scrollToBottom();
         }
-        // Si le buffer n'a que des séquences ANSI sans texte, garder ⏳ visible
       } catch {}
-      // Flush des messages WS arrivés pendant le replay (non inclus dans le buffer)
-      isReplayingRef.current = false;
-      const queued = wsMsgQueueRef.current.splice(0);
+
+      // Guard crucial contre la double-exécution StrictMode :
+      // sans ce guard, le replayBuffer du mount1 (destroyed=true) écrase isReplayingRef
+      // et vole la queue du mount2 via splice() alors que mount2 est encore en cours de replay.
       if (!destroyed) {
+        isReplayingRef.current = false;
+        const queued = wsMsgQueueRef.current.splice(0);
         try {
-          if (queued.length > 0) {
-            if (hasOutput) {
-              queued.forEach((d) => xterm.write(d));
-            } else {
-              // Le buffer n'avait pas de texte visible — si les messages WS en ont, remplacer ⏳
-              const combinedQueued = queued.join('');
-              if (hasVisibleText(combinedQueued)) {
-                xterm.reset();
-                queued.forEach((d) => xterm.write(d));
-              }
-              // Sinon ⏳ reste jusqu'à ce que le WS apporte du contenu (alt screen de Claude)
-            }
-          }
+          // Toujours flusher les msgs WS mis en queue (peuvent contenir des séquences
+          // critiques comme \x1b[?1049h switch alt-screen)
+          queued.forEach((d) => xterm.write(d));
           xterm.scrollToBottom();
         } catch {}
         setReplaying(false);
-        // Re-fit après replay : le ResizeObserver a pu manquer un resize pendant isReplaying
         try { fitAddon.fit(); } catch {}
+        setTimeout(() => { if (!destroyed) try { fitAddon.fit(); } catch {} }, 150);
       }
     };
 
     /* ── WebSocket avec reconnexion automatique ───────────────── */
-    // Utilise le host courant (respecte le proxy Vite en dev, le reverse proxy en prod)
-    const wsUrl = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`;
+    // IMPORTANT : utiliser /ws pour que Vite proxy redirige vers le backend (:3001).
+    // ws://localhost:3000 (racine) = WebSocket HMR de Vite → aucun terminal:output reçu.
+    // ws://localhost:3000/ws       = proxy vers backend → reçoit tous les events ✓
+    const wsUrl = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws`;
     let reconnectDelay = 1000;
 
     const connect = () => {
@@ -444,6 +436,8 @@ function TerminalView({ terminalId, terminalName, terminalDirectory, terminalSta
         if (destroyed) { ws.close(); return; }
         reconnectDelay = 1000; // reset le backoff
         setWsStatus('open');
+        // S'abonner uniquement à ce terminal pour réduire le trafic WS (surtout en mode grille)
+        ws.send(JSON.stringify({ type: 'subscribe', data: { terminalId } }));
         // Re-rejoue le buffer pour combler les trous pendant la déconnexion
         replayBuffer();
       };
@@ -865,6 +859,19 @@ function TerminalView({ terminalId, terminalName, terminalDirectory, terminalSta
       <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
         {/* Terminal xterm — toujours monté */}
         <div ref={containerRef} style={{ position: 'absolute', inset: 0, display: activeTab === 'terminal' ? 'block' : 'none' }} />
+        {/* Indicateur de démarrage — transparent pour ne pas masquer le contenu xterm */}
+        {replaying && activeTab === 'terminal' && (
+          <div style={{
+            position: 'absolute', bottom: 8, left: '50%', transform: 'translateX(-50%)',
+            zIndex: 5, background: 'rgba(26,27,38,0.85)', borderRadius: 6,
+            padding: '4px 12px', fontSize: 12, color: '#565f89',
+            display: 'flex', alignItems: 'center', gap: 6,
+            pointerEvents: 'none', whiteSpace: 'nowrap',
+          }}>
+            <span style={{ animation: 'ws-blink 1s ease-in-out infinite' }}>⏳</span>
+            Démarrage…
+          </div>
+        )}
         {/* Git Diff — monté au premier clic, puis persistant */}
         {diffEverOpened && (
           <div style={{ position: 'absolute', inset: 0, display: activeTab === 'diff' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
