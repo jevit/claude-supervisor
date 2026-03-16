@@ -45,6 +45,6 @@ npm run preview  # Preview du build
 ## Règles
 
 - Pas de TypeScript
-- Pas de librairie de charts externe — barres ASCII pour l'instant
+- Librairie de charts : `recharts` est autorisée dans `Analytics.jsx` uniquement (décision ADR-063). Pour les autres composants, privilégier SVG natif (voir `Sparkline` dans `Terminals.jsx`).
 - Les données temps réel arrivent par WS, les données initiales par fetch REST
 - Le proxy Vite redirige `/api/*` et `/ws/*` vers `:3001` — pas de CORS à gérer en dev

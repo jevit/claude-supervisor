@@ -50,8 +50,27 @@ class SquadManager {
    * @param {boolean} [opts.autoCoordinate]
    * @param {boolean} [opts.useWorktrees]
    */
-  createSquad({ name, goal, directory, tasks, model, autoCoordinate = true, useWorktrees = false }) {
+  /**
+   * Vérifie s'il existe un cycle dans les dépendances (#73).
+   */
+  _hasCycle(tasks) {
+    const graph = new Map(tasks.map((t) => [t.name, Array.isArray(t.dependsOn) ? t.dependsOn : []]));
+    const visited = new Set();
+    const inStack = new Set();
+    const dfs = (node) => {
+      if (inStack.has(node)) return true;
+      if (visited.has(node)) return false;
+      visited.add(node); inStack.add(node);
+      for (const dep of (graph.get(node) || [])) { if (dfs(dep)) return true; }
+      inStack.delete(node);
+      return false;
+    };
+    return tasks.some((t) => dfs(t.name));
+  }
+
+  createSquad({ name, goal, directory, tasks, model, autoCoordinate = true, useWorktrees = false, timeoutMs = null, mode = 'oneshot', rollingDelayMs = 0 }) {
     if (!name || !goal || !tasks || !Array.isArray(tasks) || tasks.length === 0) return null;
+    if (this._hasCycle(tasks)) throw new Error('Dépendances cycliques détectées dans les tâches du squad');
 
     const squadId = randomUUID();
     const useWt   = useWorktrees && !!this.worktreeManager && this.worktreeManager.isGitRepo();
@@ -64,6 +83,10 @@ class SquadManager {
       model: model || null,
       autoCoordinate,
       useWorktrees: useWt,
+      timeoutMs: timeoutMs ? parseInt(timeoutMs, 10) : null, // timeout global (#13)
+      mode: mode === 'rolling' ? 'rolling' : 'oneshot', // mode de relance (#77)
+      rollingDelayMs: parseInt(rollingDelayMs, 10) || 0,
+      rollingIteration: 0, // compteur de relances
       status: 'running',
       members: [],
       createdAt: new Date().toISOString(),
@@ -446,6 +469,17 @@ REGLES DE COORDINATION:
         member.progress   = 100;
         member.completedAt = new Date().toISOString();
         changed = true;
+
+        // Partager le résultat dans le contexte partagé (#78)
+        if (taskComplete && this.sharedContext) {
+          const lines = clean.split('\n').filter((l) => l.trim());
+          const excerpt = lines.slice(-20).join('\n').substring(0, 1000);
+          this.sharedContext.add(
+            `squad:${squad.id}/results/${member.name}`,
+            excerpt,
+            'squad-manager',
+          );
+        }
       }
     }
 
@@ -462,13 +496,53 @@ REGLES DE COORDINATION:
 
     if (waiting === 0 && running === 0 && squad.status === 'running') {
       const completed = workers.filter((m) => m.status === 'completed' || m.status === 'exited').length;
-      squad.status = completed === workers.length ? 'completed' : 'partial';
-      squad.completedAt = new Date().toISOString();
+
+      // Mode rolling : relancer tous les workers après le délai configuré (#77)
+      if (squad.mode === 'rolling') {
+        squad.rollingIteration = (squad.rollingIteration || 0) + 1;
+        this.broadcast('squad:rolling', { id: squad.id, name: squad.name, iteration: squad.rollingIteration });
+        const delay = squad.rollingDelayMs || 0;
+        setTimeout(() => {
+          const s = this.squads.get(squad.id);
+          if (!s || s.status !== 'running') return;
+          // Reconstruire la liste de tâches pour _buildPrompt
+          const allTasks = s.members
+            .filter((mem) => !mem.isCoordinator)
+            .map((mem) => ({ name: mem.name, task: mem.task, dependsOn: mem.dependsOn }));
+
+          for (const m of s.members.filter((m) => !m.isCoordinator)) {
+            m.status = 'running';
+            m.progress = 0;
+            m.startedAt = new Date().toISOString();
+            m.completedAt = null;
+            try {
+              // _spawnConfig est supprimé après le spawn initial — reconstruire comme retryMember
+              const prompt  = this._buildPrompt(s, m.name, m.task, allTasks, !!m.worktreePath);
+              const workDir = m.worktreePath || s.directory;
+              const newId   = this.terminalManager.spawn({
+                directory: workDir,
+                name: `[Squad] ${m.name}`,
+                prompt,
+                model: s.model || undefined,
+              }).terminalId;
+              m.id = newId;
+            } catch (e) {
+              console.warn(`SquadManager rolling: respawn echec ${m.name}: ${e.message}`);
+              m.status = 'error';
+            }
+          }
+          this._persist();
+          this.broadcast('squad:updated', this._summary(s));
+        }, delay);
+      } else {
+        squad.status = completed === workers.length ? 'completed' : 'partial';
+        squad.completedAt = new Date().toISOString();
+        this.broadcast('squad:completed', {
+          id: squad.id, name: squad.name,
+          completedCount: completed, totalCount: squad.members.length,
+        });
+      }
       changed = true;
-      this.broadcast('squad:completed', {
-        id: squad.id, name: squad.name,
-        completedCount: completed, totalCount: squad.members.length,
-      });
     }
 
     if (changed) this._persist();
@@ -479,7 +553,15 @@ REGLES DE COORDINATION:
     this._syncing = true;
     try {
       for (const squad of this.squads.values()) {
-        if (squad.status === 'running') this._syncMemberStatuses(squad);
+        if (squad.status !== 'running') continue;
+        // Vérifier le timeout global (#13)
+        if (squad.timeoutMs && Date.now() - new Date(squad.createdAt).getTime() > squad.timeoutMs) {
+          console.warn(`SquadManager: timeout atteint pour ${squad.id} (${squad.timeoutMs}ms) — annulation`);
+          this.cancelSquad(squad.id);
+          this.broadcast('squad:timeout', { id: squad.id, name: squad.name, timeoutMs: squad.timeoutMs });
+          continue;
+        }
+        this._syncMemberStatuses(squad);
       }
     } finally {
       this._syncing = false;
@@ -492,6 +574,8 @@ REGLES DE COORDINATION:
       name: squad.name,
       status: squad.status,
       useWorktrees: squad.useWorktrees,
+      mode: squad.mode || 'oneshot',
+      rollingIteration: squad.rollingIteration || 0,
       members: squad.members.map((m) => ({
         id: m.id,
         name: m.name,
@@ -503,6 +587,61 @@ REGLES DE COORDINATION:
         progress: m.progress,
       })),
     };
+  }
+
+  /**
+   * Relancer un membre en erreur ou exited (#12).
+   */
+  retryMember(squadId, memberName) {
+    const squad = this.squads.get(squadId);
+    if (!squad || squad.status === 'cancelled') return null;
+
+    const member = squad.members.find((m) => m.name === memberName);
+    if (!member) return null;
+    if (!['error', 'exited'].includes(member.status)) return null;
+
+    // Tuer l'ancien terminal si encore vivant
+    if (member.id) {
+      try { this.terminalManager.kill(member.id); } catch {}
+    }
+
+    // Reconstruire la liste de toutes les tâches à partir des membres
+    const allTasks = squad.members
+      .filter((m) => !m.isCoordinator)
+      .map((m) => ({ name: m.name, task: m.task, dependsOn: m.dependsOn }));
+
+    const prompt = this._buildPrompt(squad, memberName, member.task, allTasks, !!member.worktreePath);
+    const workDir = member.worktreePath || squad.directory;
+
+    try {
+      const result = this.terminalManager.spawn({
+        directory: workDir,
+        name: `[Squad] ${memberName}`,
+        prompt,
+        model: squad.model || undefined,
+      });
+      member.id         = result.terminalId;
+      member.status     = 'running';
+      member.progress   = 0;
+      member.startedAt  = new Date().toISOString();
+      member.completedAt = null;
+      member.error      = undefined;
+
+      // Remettre le squad en running si nécessaire
+      if (squad.status !== 'running') {
+        squad.status       = 'running';
+        squad.completedAt  = null;
+      }
+
+      this._persist();
+      this.broadcast('squad:member-started', { squadId, squadName: squad.name, memberName, terminalId: result.terminalId });
+      return member;
+    } catch (err) {
+      member.status = 'error';
+      member.error  = err.message;
+      this._persist();
+      return null;
+    }
   }
 
   removeSquad(squadId) {

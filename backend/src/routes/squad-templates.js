@@ -17,6 +17,16 @@ router.post('/', (req, res) => {
   res.status(201).json(tpl);
 });
 
+// Restaurer une version antérieure d'un template (#21)
+router.post('/:id/restore', (req, res) => {
+  const squadTemplates = req.app.locals.squadTemplates;
+  const { versionIndex } = req.body;
+  if (versionIndex === undefined) return res.status(400).json({ error: 'versionIndex requis' });
+  const tpl = squadTemplates.restoreVersion(req.params.id, Number(versionIndex));
+  if (!tpl) return res.status(404).json({ error: 'Version introuvable' });
+  res.json(tpl);
+});
+
 // Supprimer un template
 router.delete('/:id', (req, res) => {
   const squadTemplates = req.app.locals.squadTemplates;

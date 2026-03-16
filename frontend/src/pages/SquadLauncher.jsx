@@ -7,9 +7,11 @@ import { useWebSocket } from '../services/websocket';
 /* ────────────────────────────────────────────────────────────────── */
 
 function TemplatesPanel({ onLoad }) {
-  const [templates, setTemplates] = useState([]);
-  const [open,      setOpen]      = useState(false);
-  const [deleting,  setDeleting]  = useState(null);
+  const [templates,    setTemplates]    = useState([]);
+  const [open,         setOpen]         = useState(false);
+  const [deleting,     setDeleting]     = useState(null);
+  const [showVersions, setShowVersions] = useState(null); // templateId avec historique ouvert
+  const importRef = React.useRef(null);
 
   const fetchTemplates = useCallback(() => {
     fetch('/api/squad-templates')
@@ -27,14 +29,74 @@ function TemplatesPanel({ onLoad }) {
     fetchTemplates();
   };
 
+  // Restaurer une version antérieure (#21)
+  const handleRestoreVersion = async (id, versionIndex) => {
+    await fetch(`/api/squad-templates/${id}/restore`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ versionIndex }),
+    });
+    fetchTemplates();
+    setShowVersions(null);
+  };
+
+  // Export tous les templates en JSON (#22)
+  const handleExport = () => {
+    const blob = new Blob([JSON.stringify(templates, null, 2)], { type: 'application/json' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = `squad-templates-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // Import templates depuis un fichier JSON (#22)
+  const handleImport = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      try {
+        const data = JSON.parse(ev.target.result);
+        const list = Array.isArray(data) ? data : [data];
+        for (const tpl of list) {
+          if (!tpl.config?.goal || !Array.isArray(tpl.config?.tasks)) continue;
+          await fetch('/api/squad-templates', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: tpl.name || 'Importé', config: tpl.config }),
+          });
+        }
+        fetchTemplates();
+      } catch {}
+    };
+    reader.readAsText(file);
+    e.target.value = ''; // reset pour permettre de réimporter le même fichier
+  };
+
   if (templates.length === 0) return null;
 
   return (
     <div className="tpl-panel card" style={{ marginBottom: 16 }}>
-      <button className="tpl-toggle" onClick={() => setOpen((v) => !v)}>
-        <span>📋 Templates enregistrés ({templates.length})</span>
-        <span>{open ? '▲' : '▼'}</span>
-      </button>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <button className="tpl-toggle" onClick={() => setOpen((v) => !v)} style={{ flex: 1 }}>
+          <span>📋 Templates enregistrés ({templates.length})</span>
+          <span>{open ? '▲' : '▼'}</span>
+        </button>
+        {/* Export / Import (#22) */}
+        <button
+          onClick={handleExport}
+          title="Exporter tous les templates en JSON"
+          style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 11, padding: '3px 8px' }}
+        >📤</button>
+        <input ref={importRef} type="file" accept=".json" onChange={handleImport} style={{ display: 'none' }} />
+        <button
+          onClick={() => importRef.current?.click()}
+          title="Importer des templates depuis un fichier JSON"
+          style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 11, padding: '3px 8px' }}
+        >📥</button>
+      </div>
 
       {open && (
         <div className="tpl-grid">
@@ -65,9 +127,49 @@ function TemplatesPanel({ onLoad }) {
                   <span className="tpl-task-chip tpl-task-more">+{t.config.tasks.length - 3}</span>
                 )}
               </div>
-              <button className="tpl-load-btn" onClick={() => { onLoad(t.config); setOpen(false); }}>
-                ↗ Charger
-              </button>
+              <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+                <button className="tpl-load-btn" style={{ flex: 1 }} onClick={() => { onLoad(t.config); setOpen(false); }}>
+                  ↗ Charger
+                </button>
+                {t.versions && t.versions.length > 0 && (
+                  <button
+                    onClick={() => setShowVersions(showVersions === t.id ? null : t.id)}
+                    title={`${t.versions.length} version(s) antérieure(s)`}
+                    style={{ background: 'rgba(139,92,246,0.1)', border: '1px solid rgba(139,92,246,0.3)', borderRadius: 6, color: '#8b5cf6', cursor: 'pointer', fontSize: 11, padding: '3px 8px' }}
+                  >
+                    🕐 {t.versions.length}
+                  </button>
+                )}
+              </div>
+              {/* Historique des versions (#21) */}
+              {showVersions === t.id && t.versions && t.versions.length > 0 && (
+                <div style={{ marginTop: 8, borderTop: '1px solid var(--border)', paddingTop: 8 }}>
+                  <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4 }}>Versions précédentes :</div>
+                  {[...t.versions].reverse().map((v, ri) => {
+                    const origIdx = t.versions.length - 1 - ri;
+                    return (
+                      <div key={origIdx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '3px 0', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                        <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                          {new Date(v.savedAt).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                          {' · '}{v.config?.tasks?.length || 0} agent{(v.config?.tasks?.length || 0) > 1 ? 's' : ''}
+                        </span>
+                        <div style={{ display: 'flex', gap: 4 }}>
+                          <button
+                            onClick={() => { onLoad(v.config); setOpen(false); }}
+                            style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 10, padding: '2px 6px' }}
+                            title="Charger cette version"
+                          >↗</button>
+                          <button
+                            onClick={() => handleRestoreVersion(t.id, origIdx)}
+                            style={{ background: 'rgba(139,92,246,0.1)', border: '1px solid rgba(139,92,246,0.3)', borderRadius: 4, color: '#8b5cf6', cursor: 'pointer', fontSize: 10, padding: '2px 6px' }}
+                            title="Restaurer comme version courante"
+                          >↩</button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -91,9 +193,11 @@ function SquadForm({ initialConfig, onCreated, onTemplateRefresh }) {
   const [directory,    setDirectory]    = useState('');
   const [model,        setModel]        = useState('');
   const [tasks,        setTasks]        = useState(BLANK_TASKS);
-  const [useWorktrees, setUseWorktrees] = useState(false);
-  const [launching,    setLaunching]    = useState(false);
-  const [error,        setError]        = useState('');
+  const [useWorktrees,   setUseWorktrees]   = useState(false);
+  const [mode,           setMode]           = useState('oneshot'); // 'oneshot' | 'rolling' (#77)
+  const [rollingDelay,   setRollingDelay]   = useState(0); // délai en secondes entre itérations rolling
+  const [launching,      setLaunching]      = useState(false);
+  const [error,          setError]          = useState('');
 
   // Nom du template à sauvegarder
   const [tplName,      setTplName]      = useState('');
@@ -115,6 +219,24 @@ function SquadForm({ initialConfig, onCreated, onTemplateRefresh }) {
     );
     setTplName('');
   }, [initialConfig]);
+
+  // Vérifie si ajouter "toIdx dépend de fromIdx" créerait un cycle.
+  // Un cycle existe si fromIdx dépend déjà transitivement de toIdx.
+  function wouldCreateCycle(fromIdx, toIdx) {
+    const visited = new Set();
+    const stack = [fromIdx];
+    while (stack.length) {
+      const cur = stack.pop();
+      if (cur === toIdx) return true;
+      if (visited.has(cur)) continue;
+      visited.add(cur);
+      (tasks[cur]?.dependsOn || []).forEach((depName) => {
+        const depIdx = tasks.findIndex((t) => t.name === depName);
+        if (depIdx !== -1) stack.push(depIdx);
+      });
+    }
+    return false;
+  }
 
   function addTask() {
     setTasks([...tasks, { name: `Agent ${tasks.length + 1}`, task: '', dependsOn: [] }]);
@@ -150,6 +272,8 @@ function SquadForm({ initialConfig, onCreated, onTemplateRefresh }) {
             dependsOn: t.dependsOn || [],
           })),
           useWorktrees,
+          mode,
+          rollingDelayMs: mode === 'rolling' ? rollingDelay * 1000 : undefined,
         }),
       });
       const data = await res.json();
@@ -158,6 +282,8 @@ function SquadForm({ initialConfig, onCreated, onTemplateRefresh }) {
       setName('');
       setGoal('');
       setTasks(BLANK_TASKS);
+      setMode('oneshot');
+      setRollingDelay(0);
     } catch (err) {
       setError(err.message);
     }
@@ -217,9 +343,9 @@ function SquadForm({ initialConfig, onCreated, onTemplateRefresh }) {
             Modèle
             <select className="squad-input" value={model} onChange={(e) => setModel(e.target.value)}>
               <option value="">Par défaut</option>
-              <option value="sonnet">Sonnet</option>
-              <option value="opus">Opus</option>
-              <option value="haiku">Haiku</option>
+              <option value="claude-sonnet-4-6">Sonnet 4.6</option>
+              <option value="claude-opus-4-6">Opus 4.6</option>
+              <option value="claude-haiku-4-5-20251001">Haiku 4.5</option>
             </select>
           </label>
         </div>
@@ -233,7 +359,30 @@ function SquadForm({ initialConfig, onCreated, onTemplateRefresh }) {
           <input type="checkbox" checked={useWorktrees} onChange={(e) => setUseWorktrees(e.target.checked)} />
           <span>Worktrees isolés</span>
           <span className="squad-wt-hint">— branche git par agent dans cs-worktrees/</span>
+          <span title="Chaque agent reçoit un répertoire git indépendant, évitant les conflits de fichiers entre agents. Nécessite un repo git." style={{ fontSize: 11, cursor: 'help', opacity: 0.6 }}>ℹ</span>
         </label>
+        {/* Mode rolling (#77) */}
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <label className="squad-label" style={{ flex: '0 0 auto', marginBottom: 0 }}>
+            Mode d'exécution
+            <span title="One-shot : les agents s'exécutent une seule fois. Rolling : les agents redémarrent automatiquement en boucle après chaque cycle (utile pour le monitoring continu)." style={{ fontSize: 11, cursor: 'help', opacity: 0.6, marginLeft: 4 }}>ℹ</span>
+          </label>
+          <select value={mode} onChange={(e) => setMode(e.target.value)} className="squad-input" style={{ width: 'auto', minWidth: 140 }}>
+            <option value="oneshot">One-shot (par défaut)</option>
+            <option value="rolling">Rolling (boucle continue)</option>
+          </select>
+          {mode === 'rolling' && (
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-secondary)' }}>
+              Délai entre itérations :
+              <input
+                type="number" min={0} max={3600}
+                value={rollingDelay} onChange={(e) => setRollingDelay(Number(e.target.value))}
+                className="squad-input" style={{ width: 70 }}
+              />
+              s
+            </label>
+          )}
+        </div>
         <div className="squad-tasks-header">
           <strong>Sous-tâches ({tasks.length})</strong>
           <button type="button" className="squad-add-btn" onClick={addTask}>+ Ajouter</button>
@@ -241,12 +390,15 @@ function SquadForm({ initialConfig, onCreated, onTemplateRefresh }) {
         <div className="squad-tasks-list">
           {tasks.map((t, i) => {
             const available = tasks.filter((_, j) => j !== i && tasks[j].name.trim());
-            const toggleDep = (depName) => {
+            const toggleDep = (depName, depIdx) => {
               const deps = t.dependsOn || [];
-              updateTask(i, 'dependsOn', deps.includes(depName)
-                ? deps.filter((d) => d !== depName)
-                : [...deps, depName]
-              );
+              if (deps.includes(depName)) {
+                updateTask(i, 'dependsOn', deps.filter((d) => d !== depName));
+              } else {
+                // Vérifier cycle : si depIdx dépend déjà de i (directement ou indirectement)
+                if (wouldCreateCycle(depIdx, i)) return; // silencieusement bloqué — chip reste grisée
+                updateTask(i, 'dependsOn', [...deps, depName]);
+              }
             };
             return (
               <div key={i} className="squad-task-block">
@@ -262,14 +414,17 @@ function SquadForm({ initialConfig, onCreated, onTemplateRefresh }) {
                   <div className="squad-deps-row">
                     <span className="squad-deps-label">Attend :</span>
                     {available.map((a) => {
+                      const aIdx = tasks.findIndex((x) => x === a);
                       const active = (t.dependsOn || []).includes(a.name);
+                      const isCyclic = !active && wouldCreateCycle(aIdx, i);
                       return (
                         <button key={a.name} type="button"
-                          className={`squad-dep-chip ${active ? 'active' : ''}`}
-                          onClick={() => toggleDep(a.name)}
-                          title={active ? `Retirer dépendance sur ${a.name}` : `Attendre que ${a.name} termine`}
+                          className={`squad-dep-chip ${active ? 'active' : ''} ${isCyclic ? 'cyclic' : ''}`}
+                          onClick={() => !isCyclic && toggleDep(a.name, aIdx)}
+                          title={isCyclic ? `⛔ Créerait une dépendance circulaire` : active ? `Retirer dépendance sur ${a.name}` : `Attendre que ${a.name} termine`}
+                          disabled={isCyclic}
                         >
-                          {active ? '⏱ ' : ''}{a.name}
+                          {active ? '⏱ ' : isCyclic ? '⛔ ' : ''}{a.name}
                         </button>
                       );
                     })}
@@ -369,8 +524,13 @@ export default function SquadLauncher() {
 
   useEffect(() => {
     fetchSquads();
-    const t = setInterval(fetchSquads, 5000);
-    return () => clearInterval(t);
+    let t = setInterval(fetchSquads, 5000);
+    const onVisibility = () => {
+      if (document.hidden) { clearInterval(t); t = null; }
+      else { clearInterval(t); fetchSquads(); t = setInterval(fetchSquads, 5000); }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => { clearInterval(t); document.removeEventListener('visibilitychange', onVisibility); };
   }, [fetchSquads]);
 
   useWebSocket(useCallback((event) => {
@@ -453,8 +613,9 @@ export default function SquadLauncher() {
         .squad-deps-row { display: flex; align-items: center; gap: 6px; padding-left: 4px; flex-wrap: wrap; }
         .squad-deps-label { font-size: 11px; color: var(--text-secondary); font-weight: 600; white-space: nowrap; }
         .squad-dep-chip { background: var(--bg-primary); border: 1px solid var(--border); border-radius: 12px; padding: 2px 10px; font-size: 11px; cursor: pointer; color: var(--text-secondary); transition: all 0.15s; }
-        .squad-dep-chip:hover { border-color: var(--accent); color: var(--accent); }
+        .squad-dep-chip:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
         .squad-dep-chip.active { background: rgba(139,92,246,0.15); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+        .squad-dep-chip.cyclic { border-color: rgba(239,68,68,0.4); color: rgba(239,68,68,0.6); cursor: not-allowed; opacity: 0.6; }
         .squad-remove-btn { background: none; border: none; color: var(--error, #ef4444); cursor: pointer; font-size: 16px; padding: 4px 8px; }
         .squad-remove-btn:disabled { opacity: 0.3; cursor: not-allowed; }
         .squad-wt-label { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; font-weight: 600; color: var(--text-primary); }

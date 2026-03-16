@@ -1,6 +1,17 @@
 const express = require('express');
+const fs = require('fs');
 const { runGit, getFullDiff } = require('../services/git-utils');
 const router = express.Router();
+
+// Rate limiting simple sur le spawn (#47) — max 10 créations par minute
+const spawnHistory = [];
+function isRateLimited() {
+  const now = Date.now();
+  while (spawnHistory.length && now - spawnHistory[0] > 60000) spawnHistory.shift();
+  if (spawnHistory.length >= 10) return true;
+  spawnHistory.push(now);
+  return false;
+}
 
 // Verifier si node-pty est disponible
 router.get('/available', (req, res) => {
@@ -14,15 +25,27 @@ router.get('/', (req, res) => {
   res.json(terminalManager.listTerminals());
 });
 
+// Valider un chemin de répertoire (#20)
+router.post('/validate-path', (req, res) => {
+  const { path: dirPath } = req.body;
+  if (!dirPath) return res.status(400).json({ valid: false, error: 'path requis' });
+  const exists = fs.existsSync(dirPath);
+  const isDir  = exists && fs.statSync(dirPath).isDirectory();
+  res.json({ valid: isDir, exists, isDirectory: isDir });
+});
+
 // Lancer un nouveau terminal Claude Code
 router.post('/', (req, res) => {
   const terminalManager = req.app.locals.terminalManager;
   if (!terminalManager.isAvailable()) {
-    return res.status(503).json({ error: 'node-pty non disponible' });
+    return res.status(503).json({ error: 'node-pty non disponible — exécutez : cd backend && npm rebuild node-pty' });
+  }
+  if (isRateLimited()) {
+    return res.status(429).json({ error: 'Trop de terminaux créés rapidement (max 10/min)' });
   }
   try {
-    const { directory, name, prompt, model, dangerousMode, injectContext } = req.body;
-    const result = terminalManager.spawn({ directory, name, prompt, model, dangerousMode, injectContext });
+    const { directory, name, prompt, model, dangerousMode, injectContext, resumeSessionId } = req.body;
+    const result = terminalManager.spawn({ directory, name, prompt, model, dangerousMode, injectContext, resumeSessionId });
     res.status(201).json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });

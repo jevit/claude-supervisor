@@ -10,8 +10,13 @@ router.get('/', (req, res) => {
 // Creer un nouveau squad
 router.post('/', (req, res) => {
   const squadManager = req.app.locals.squadManager;
-  const { name, goal, directory, tasks, model, autoCoordinate } = req.body;
-  const squad = squadManager.createSquad({ name, goal, directory, tasks, model, autoCoordinate });
+  const { name, goal, directory, tasks, model, autoCoordinate, useWorktrees, timeoutMs, mode, rollingDelayMs } = req.body;
+  let squad;
+  try {
+    squad = squadManager.createSquad({ name, goal, directory, tasks, model, autoCoordinate, useWorktrees, timeoutMs, mode, rollingDelayMs });
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
   if (!squad) {
     return res.status(400).json({ error: 'name, goal et tasks (tableau) sont requis' });
   }
@@ -49,6 +54,14 @@ router.post('/:id/broadcast', (req, res) => {
   if (!message) return res.status(400).json({ error: 'message requis' });
   const sent = squadManager.broadcastToSquad(req.params.id, message);
   res.json({ sent });
+});
+
+// Relancer un membre en erreur (#12)
+router.post('/:id/members/:memberName/retry', (req, res) => {
+  const squadManager = req.app.locals.squadManager;
+  const member = squadManager.retryMember(req.params.id, req.params.memberName);
+  if (!member) return res.status(400).json({ error: 'Membre introuvable ou non relançable' });
+  res.json(member);
 });
 
 // Mettre a jour la progression d'un membre

@@ -7,7 +7,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 
 /* ── Parsers ─────────────────────────────────────────────────────── */
 
-function parseDiff(raw) {
+export function parseDiff(raw) {
   if (!raw) return [];
   const lines = raw.split('\n');
   const hunks = [];
@@ -36,7 +36,7 @@ function parseDiff(raw) {
 }
 
 // Convertit des hunks en lignes côte-à-côte { left, right }
-function buildSideBySide(hunks) {
+export function buildSideBySide(hunks) {
   const rows = [];
   for (const hunk of hunks) {
     rows.push({ isHeader: true, header: hunk.header });
@@ -74,7 +74,7 @@ function buildSideBySide(hunks) {
 }
 
 // Construit un arbre { dirs: {name: node}, files: [file] } depuis une liste plate
-function buildFileTree(files) {
+export function buildFileTree(files) {
   const root = { dirs: {}, files: [] };
   for (const f of files) {
     const parts = f.path.replace(/\\/g, '/').split('/');
@@ -90,7 +90,7 @@ function buildFileTree(files) {
 }
 
 /* ── Couleur de statut ───────────────────────────────────────────── */
-function fileColor(f) {
+export function fileColor(f) {
   if (f.status === 'untracked') return '#6b7280';
   if (f.status === 'deleted')   return '#ef4444';
   if (f.status === 'added')     return '#10b981';
@@ -98,7 +98,7 @@ function fileColor(f) {
   if (f.unstaged)               return '#f59e0b'; // non-stagé → orange
   return '#3b82f6';
 }
-function fileStatusLetter(f) {
+export function fileStatusLetter(f) {
   if (f.status === 'untracked') return '?';
   if (f.status === 'deleted')   return 'D';
   if (f.status === 'added')     return 'A';
@@ -284,8 +284,11 @@ export default function GitDiffPanel({ directory, terminalId, onClose }) {
   const [data, setData]           = useState(null);
   const [selectedFile, setSelectedFile] = useState(null);
   const [activity, setActivity]       = useState([]);
-  const [viewMode, setViewMode]       = useState('unified'); // 'unified' | 'split'
-  const [fileView, setFileView]       = useState('tree');    // 'list' | 'tree'
+  const [viewMode, setViewMode]       = useState(() => localStorage.getItem('diff:view')   || 'unified'); // 'unified' | 'split'
+  const [fileView, setFileView]       = useState(() => localStorage.getItem('diff:layout') || 'tree');    // 'list' | 'tree'
+  const [mainTab, setMainTab]         = useState('diff'); // 'diff' | 'log'
+  const [gitLog, setGitLog]           = useState(null);
+  const [logLoading, setLogLoading]   = useState(false);
   const [commitMsg, setCommitMsg]     = useState('');
   const [committing, setCommitting]   = useState(false);
   const [commitResult, setCommitResult] = useState(null); // 'ok' | 'error'
@@ -397,7 +400,20 @@ export default function GitDiffPanel({ directory, terminalId, onClose }) {
     setCommitting(false);
   };
 
+  const fetchLog = useCallback(async () => {
+    if (!resolvedDir) return;
+    setLogLoading(true);
+    try {
+      const res = await fetch(`/api/git/log?directory=${encodeURIComponent(resolvedDir)}`);
+      if (res.ok) setGitLog(await res.json());
+    } catch {}
+    setLogLoading(false);
+  }, [resolvedDir]);
+
   useEffect(() => { fetchDiff(); }, [fetchDiff]);
+
+  // Réinitialiser la sélection de fichier lors d'un changement de terminal/répertoire
+  useEffect(() => { setSelectedFile(null); }, [terminalId, directory]);
 
   // Ecouter file:activity pour auto-refresh + feed live
   useEffect(() => {
@@ -456,15 +472,20 @@ export default function GitDiffPanel({ directory, terminalId, onClose }) {
           )}
         </div>
         <div className="gdp-header-right">
-          {/* Toggle mode diff */}
+          {/* Onglet Diff / Log (#82) */}
           <div className="gdp-toggle-group">
-            <button className={`gdp-toggle ${viewMode === 'unified' ? 'gdp-toggle-active' : ''}`} onClick={() => setViewMode('unified')} title="Vue unifiée">≡</button>
-            <button className={`gdp-toggle ${viewMode === 'split'   ? 'gdp-toggle-active' : ''}`} onClick={() => setViewMode('split')}   title="Vue côte à côte">⊞</button>
+            <button className={`gdp-toggle ${mainTab === 'diff' ? 'gdp-toggle-active' : ''}`} onClick={() => setMainTab('diff')} title="Diff working tree">⎇ Diff</button>
+            <button className={`gdp-toggle ${mainTab === 'log'  ? 'gdp-toggle-active' : ''}`} onClick={() => { setMainTab('log'); if (!gitLog) fetchLog(); }} title="Historique des commits">📜 Log</button>
           </div>
+          {/* Toggle mode diff */}
+          {mainTab === 'diff' && <div className="gdp-toggle-group">
+            <button className={`gdp-toggle ${viewMode === 'unified' ? 'gdp-toggle-active' : ''}`} onClick={() => { setViewMode('unified'); localStorage.setItem('diff:view', 'unified'); }} title="Vue unifiée">≡</button>
+            <button className={`gdp-toggle ${viewMode === 'split'   ? 'gdp-toggle-active' : ''}`} onClick={() => { setViewMode('split');   localStorage.setItem('diff:view', 'split');   }} title="Vue côte à côte">⊞</button>
+          </div>}
           {/* Toggle vue fichiers */}
           <div className="gdp-toggle-group">
-            <button className={`gdp-toggle ${fileView === 'list' ? 'gdp-toggle-active' : ''}`} onClick={() => setFileView('list')} title="Liste plate">☰</button>
-            <button className={`gdp-toggle ${fileView === 'tree' ? 'gdp-toggle-active' : ''}`} onClick={() => setFileView('tree')} title="Arbre">⊢</button>
+            <button className={`gdp-toggle ${fileView === 'list' ? 'gdp-toggle-active' : ''}`} onClick={() => { setFileView('list'); localStorage.setItem('diff:layout', 'list'); }} title="Liste plate">☰</button>
+            <button className={`gdp-toggle ${fileView === 'tree' ? 'gdp-toggle-active' : ''}`} onClick={() => { setFileView('tree'); localStorage.setItem('diff:layout', 'tree'); }} title="Arbre">⊢</button>
           </div>
           <button className="gdp-btn gdp-btn-refresh" onClick={fetchDiff} title="Rafraîchir" disabled={loading}>
             {loading ? '⟳' : '↻'}
@@ -485,7 +506,47 @@ export default function GitDiffPanel({ directory, terminalId, onClose }) {
         </div>
       )}
 
-      {!loading && !error && data && (
+      {/* Vue Log (#82) */}
+      {mainTab === 'log' && (
+        <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 12px', borderBottom: '1px solid #2d3148', flexShrink: 0 }}>
+            <span style={{ fontSize: 11, color: '#565f89', fontWeight: 600 }}>20 derniers commits</span>
+            <button onClick={fetchLog} disabled={logLoading} style={{ background: 'none', border: '1px solid #2d3148', borderRadius: 4, color: '#a9b1d6', cursor: 'pointer', fontSize: 12, padding: '2px 8px' }}>
+              {logLoading ? '⟳' : '↻'}
+            </button>
+          </div>
+          {logLoading && <div className="gdp-center"><span className="gdp-loading-spinner" /><span>Chargement…</span></div>}
+          {!logLoading && gitLog && (
+            <div style={{ flex: 1, overflowY: 'auto' }}>
+              {gitLog.map((c) => (
+                <div key={c.hash}
+                  onClick={() => { setSelectedFile(`__commit__${c.hash}`); setMainTab('diff'); }}
+                  style={{ display: 'flex', flexDirection: 'column', gap: 2, padding: '8px 12px', borderBottom: '1px solid rgba(45,49,72,0.4)', cursor: 'pointer', transition: 'background 0.1s' }}
+                  onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(139,92,246,0.06)'; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = ''; }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <code style={{ fontSize: 10, color: '#8b5cf6', fontFamily: 'monospace', flexShrink: 0 }}>{c.short}</code>
+                    <span style={{ fontSize: 12, color: '#c0caf5', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.subject}</span>
+                  </div>
+                  <div style={{ display: 'flex', gap: 10, fontSize: 10, color: '#565f89' }}>
+                    <span>{c.author}</span>
+                    <span>{c.date}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {!logLoading && !gitLog && (
+            <div className="gdp-center" style={{ flexDirection: 'column', gap: 6 }}>
+              <span style={{ opacity: 0.4 }}>📜</span>
+              <span>Cliquez sur ↻ pour charger l'historique</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {mainTab === 'diff' && !loading && !error && data && (
         <>
           {/* Résumé */}
           <div className="gdp-summary">
@@ -756,7 +817,7 @@ export default function GitDiffPanel({ directory, terminalId, onClose }) {
                       <code style={{ color: '#8b5cf6' }}>{hash}</code>
                       <span>{commit?.message}</span>
                     </div>
-                    <CommitDiff hash={hash} directory={directory} />
+                    <CommitDiff hash={hash} directory={resolvedDir} />
                   </div>
                 );
               })()}
@@ -764,6 +825,7 @@ export default function GitDiffPanel({ directory, terminalId, onClose }) {
           </div>
         </>
       )}
+      {mainTab === 'diff' && !loading && !error && !data && null}
 
       <style>{`
         .gdp-root {
@@ -863,7 +925,7 @@ export default function GitDiffPanel({ directory, terminalId, onClose }) {
         .gdp-diff-line { display: flex; white-space: pre; min-height: 18px; }
         .gdp-line-num  { display: inline-block; width: 44px; text-align: right; padding-right: 8px; color: #565f89; font-size: 11px; user-select: none; flex-shrink: 0; }
         .gdp-line-sign { display: inline-block; width: 14px; text-align: center; flex-shrink: 0; user-select: none; }
-        .gdp-line-content { flex: 1; overflow-x: auto; padding-right: 12px; }
+        .gdp-line-content { flex: 1; padding-right: 12px; }
         .gdp-line-add { background: rgba(16,185,129,0.08); color: #4ade80; }
         .gdp-line-add .gdp-line-sign { color: #10b981; }
         .gdp-line-add .gdp-line-num  { color: #10b981; opacity: 0.6; }
@@ -873,11 +935,11 @@ export default function GitDiffPanel({ directory, terminalId, onClose }) {
         .gdp-line-ctx { color: #9ca3af; }
 
         /* Vue côte à côte */
-        .gdp-sbs-root  { display: flex; flex-direction: column; height: 100%; font-family: 'Cascadia Code','Fira Code',Consolas,monospace; font-size: 12px; line-height: 1.5; }
-        .gdp-sbs-header { display: flex; flex-shrink: 0; border-bottom: 1px solid #2d3148; }
+        .gdp-sbs-root  { display: flex; flex-direction: column; font-family: 'Cascadia Code','Fira Code',Consolas,monospace; font-size: 12px; line-height: 1.5; }
+        .gdp-sbs-header { display: flex; flex-shrink: 0; border-bottom: 1px solid #2d3148; position: sticky; top: 0; z-index: 1; background: #1a1b26; }
         .gdp-sbs-col-header { flex: 1; padding: 4px 10px; font-size: 11px; font-weight: 700; color: #565f89; background: rgba(255,255,255,0.02); text-align: center; }
         .gdp-sbs-col-header:first-child { border-right: 1px solid #2d3148; }
-        .gdp-sbs-body { flex: 1; overflow: auto; }
+        .gdp-sbs-body { flex: 1; }
         .gdp-sbs-hunk-header { padding: 3px 12px; background: rgba(139,92,246,0.06); color: #8b5cf6; font-size: 11px; border-top: 1px solid rgba(45,49,72,0.5); border-bottom: 1px solid rgba(45,49,72,0.3); user-select: none; }
         .gdp-sbs-row  { display: flex; min-height: 18px; border-bottom: 1px solid rgba(45,49,72,0.2); }
         .gdp-sbs-cell { display: flex; flex: 1; min-width: 0; white-space: pre; overflow: hidden; }
@@ -892,9 +954,9 @@ export default function GitDiffPanel({ directory, terminalId, onClose }) {
         .gdp-sbs-empty { background: rgba(255,255,255,0.01); }
 
         /* Scrollbars */
-        .gdp-file-list::-webkit-scrollbar, .gdp-diff-view::-webkit-scrollbar, .gdp-sbs-body::-webkit-scrollbar { width: 6px; height: 6px; }
-        .gdp-file-list::-webkit-scrollbar-track, .gdp-diff-view::-webkit-scrollbar-track, .gdp-sbs-body::-webkit-scrollbar-track { background: transparent; }
-        .gdp-file-list::-webkit-scrollbar-thumb, .gdp-diff-view::-webkit-scrollbar-thumb, .gdp-sbs-body::-webkit-scrollbar-thumb { background: rgba(139,92,246,0.3); border-radius: 3px; }
+        .gdp-file-list::-webkit-scrollbar, .gdp-diff-view::-webkit-scrollbar { width: 6px; height: 6px; }
+        .gdp-file-list::-webkit-scrollbar-track, .gdp-diff-view::-webkit-scrollbar-track { background: transparent; }
+        .gdp-file-list::-webkit-scrollbar-thumb, .gdp-diff-view::-webkit-scrollbar-thumb { background: rgba(139,92,246,0.3); border-radius: 3px; }
       `}</style>
     </div>
   );

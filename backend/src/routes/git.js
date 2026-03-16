@@ -2,6 +2,19 @@ const express = require('express');
 const { runGit, runGitStrict, parseGitStatus, getFullDiff } = require('../services/git-utils');
 const router = express.Router();
 
+// Cache du diff git (#53) — invalidé par file:activity via broadcast
+const DIFF_CACHE_TTL = 5000; // 5s
+const diffCache = new Map(); // key → { result, timestamp }
+
+// Invalider le cache quand un fichier est modifié (appelé depuis broadcast)
+router.invalidateDiffCache = (directory) => {
+  if (!directory) { diffCache.clear(); return; }
+  const norm = directory.replace(/\\/g, '/').toLowerCase();
+  for (const key of diffCache.keys()) {
+    if (key.includes(norm)) diffCache.delete(key);
+  }
+};
+
 // Diff generique pour n'importe quel repertoire
 router.post('/diff', async (req, res) => {
   const { directory, commitHash } = req.body;
@@ -16,8 +29,15 @@ router.post('/diff', async (req, res) => {
       return res.status(500).json({ error: err.message });
     }
   }
+  // Vérifier le cache (#53)
+  const cacheKey = `dir:${directory}`;
+  const cached = diffCache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < DIFF_CACHE_TTL) {
+    return res.json(cached.result);
+  }
   try {
     const result = await getFullDiff(directory);
+    diffCache.set(cacheKey, { result, timestamp: Date.now() });
     res.json(result);
   } catch (err) {
     if (err.message?.includes('not a git repository') || err.stderr?.includes('not a git repository')) {
@@ -159,6 +179,25 @@ router.delete('/queue/:id', (req, res) => {
   const cancelled = gitOrchestrator.cancel(req.params.id);
   if (!cancelled) return res.status(404).json({ error: 'Queue entry not found' });
   res.json({ cancelled: true });
+});
+
+// Historique git log (#82) — 20 derniers commits
+router.get('/log', async (req, res) => {
+  const { directory } = req.query;
+  if (!directory) return res.status(400).json({ error: 'directory query param required' });
+  try {
+    const out = await runGit(
+      ['log', '--oneline', '--no-merges', '-20', '--format=%H|%h|%s|%an|%ad', '--date=relative'],
+      directory
+    );
+    const commits = out.trim().split('\n').filter(Boolean).map((line) => {
+      const [hash, short, subject, author, date] = line.split('|');
+      return { hash, short, subject, author, date };
+    });
+    res.json(commits);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Push vers le remote

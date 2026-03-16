@@ -6,7 +6,13 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
-    "test": "jest --verbose"
+    "test": "jest --verbose",
+    "test:unit": "jest --config jest.unit.config.js",
+    "test:unit:coverage": "jest --config jest.unit.config.js --coverage",
+    "test:integration": "jest --config jest.integration.config.js",
+    "test:integration:coverage": "jest --config jest.integration.config.js --coverage",
+    "test:all": "npm run test:unit && npm run test:integration",
+    "test:coverage": "npm run test:unit:coverage && npm run test:integration:coverage"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",

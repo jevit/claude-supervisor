@@ -24,6 +24,12 @@ class TerminalManager {
     // Map terminalId -> { pty, sessionId, buffer, ... }
     this.terminals = new Map();
     this.maxBufferSize = 50000; // Garder les derniers 50k chars par terminal
+
+    // Persistance périodique (#86) — toutes les 30s pour survivre à un SIGKILL
+    if (store) {
+      this._persistTimer = setInterval(() => this.persistState(), 30000);
+      this._persistTimer.unref?.(); // Ne pas bloquer la sortie du process
+    }
   }
 
   /**
@@ -40,6 +46,13 @@ class TerminalManager {
    */
   spawn(options = {}) {
     if (!pty) throw new Error('node-pty non installe');
+
+    // Limite du nombre de terminaux actifs (#52)
+    const maxTerminals = parseInt(process.env.MAX_TERMINALS || '10', 10);
+    const activeCount = [...this.terminals.values()].filter((t) => t.status === 'running').length;
+    if (activeCount >= maxTerminals) {
+      throw new Error(`Limite de ${maxTerminals} terminaux actifs atteinte (MAX_TERMINALS)`);
+    }
 
     const terminalId = crypto.randomUUID();
     const cwd = options.directory || process.cwd();
@@ -73,11 +86,24 @@ class TerminalManager {
       claudeArgs.push('--dangerously-skip-permissions');
     }
     if (options.model) {
-      if (!/^[a-zA-Z0-9._-]+$/.test(options.model)) throw new Error('Nom de modele invalide');
-      claudeArgs.push('--model', options.model);
+      // Mapper les alias courts vers les IDs officiels Claude (#19)
+      const MODEL_ALIASES = {
+        'sonnet': 'claude-sonnet-4-6',
+        'opus':   'claude-opus-4-6',
+        'haiku':  'claude-haiku-4-5-20251001',
+      };
+      const resolvedModel = MODEL_ALIASES[options.model.toLowerCase()] || options.model;
+      if (!/^[a-zA-Z0-9._-]+$/.test(resolvedModel)) throw new Error('Nom de modele invalide');
+      claudeArgs.push('--model', resolvedModel);
     }
-    // Passer le prompt via variable d'environnement pour eviter toute injection shell
-    if (effectivePrompt) {
+    // Reprendre une session Claude Code précédente (#83)
+    if (options.resumeSessionId && /^[a-zA-Z0-9_-]+$/.test(options.resumeSessionId)) {
+      claudeArgs.push('--resume', options.resumeSessionId);
+    }
+    // Passer le prompt via variable d'environnement pour eviter toute injection shell.
+    // Windows (#72) : cmd.exe avec /k garde la session ouverte — %VAR% est bien expansé.
+    // Alternative plus fiable si problème : utiliser /c (ferme la session) ou passer via bash.exe.
+    if (effectivePrompt && !options.resumeSessionId) {
       claudeArgs.push(isWindows ? '%CLAUDE_INITIAL_PROMPT%' : '"$CLAUDE_INITIAL_PROMPT"');
     }
     // On lance le shell, puis on executera claude dedans
@@ -90,7 +116,11 @@ class TerminalManager {
       cwd,
       env: {
         ...process.env,
-        CLAUDECODE: undefined, // Retirer pour eviter l'erreur "nested session"
+        // CLAUDECODE et CLAUDE_CODE_ENTRYPOINT sont positionnés par Claude Code dans ses processus enfants.
+        // Les retirer évite l'erreur "nested Claude Code session" au démarrage. (#37)
+        // Si Claude Code change ces variables de détection, les ajouter ici aussi.
+        CLAUDECODE: undefined,
+        CLAUDE_CODE_ENTRYPOINT: undefined,
         SUPERVISOR_URL: 'http://localhost:3001',
         SESSION_ID: terminalId,
         SESSION_NAME: name,
@@ -320,8 +350,17 @@ class TerminalManager {
    */
   persistState() {
     if (!this.store) return;
+    const MAX_EXITED_AGE_MS = 24 * 3600 * 1000; // 24h pour les terminaux fermés
+    const now = Date.now();
     const sessions = Array.from(this.terminals.values())
-      .filter((t) => t.status === 'running')
+      .filter((t) => {
+        if (t.status === 'running') return true;
+        // Conserver aussi les terminaux récemment fermés (< 24h) pour permettre le relancement
+        if ((t.status === 'exited' || t.status === 'killed') && t.exitedAt) {
+          return (now - new Date(t.exitedAt).getTime()) < MAX_EXITED_AGE_MS;
+        }
+        return false;
+      })
       .map((t) => ({
         id: t.id,
         name: t.name,
@@ -329,8 +368,10 @@ class TerminalManager {
         prompt: t.promptOriginal || null,
         model: t.model || null,
         dangerousMode: t.dangerousMode || false,
-        buffer: t.buffer.slice(-20000), // Garder les 20k derniers chars
+        buffer: t.buffer.slice(-20000),
         createdAt: t.createdAt,
+        exitedAt: t.exitedAt || null,
+        status: t.status, // 'running' ou 'exited'/'killed'
         savedAt: new Date().toISOString(),
       }));
     this.store.set('terminals', sessions);
@@ -350,6 +391,9 @@ class TerminalManager {
       if (this.terminals.has(s.id)) continue;
       const age = Date.now() - new Date(s.savedAt || s.createdAt).getTime();
       if (age > MAX_AGE_MS) continue;
+      // Les terminaux running au moment de la sauvegarde → ghost (interrompus inopinément)
+      // Les terminaux exited/killed → restaurés avec leur statut d'origine pour permettre le relancement
+      const wasRunning = !s.status || s.status === 'running';
       this.terminals.set(s.id, {
         id: s.id,
         pty: null,
@@ -362,10 +406,10 @@ class TerminalManager {
         model: s.model || null,
         dangerousMode: s.dangerousMode || false,
         buffer: s.buffer || '',
-        status: 'ghost',
+        status: wasRunning ? 'ghost' : s.status,
         pid: null,
         createdAt: s.createdAt,
-        exitedAt: null,
+        exitedAt: s.exitedAt || null,
         savedAt: s.savedAt,
       });
       count++;

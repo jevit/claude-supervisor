@@ -131,6 +131,10 @@ class HealthChecker {
         };
 
         check.lastResult = result;
+        // Historique des 20 derniers résultats (#65)
+        if (!check.history) check.history = [];
+        check.history.push({ success: result.status === 'pass', duration, timestamp: result.timestamp, error: result.error });
+        if (check.history.length > 20) check.history.shift();
         this._persist();
 
         const event = result.status === 'pass' ? 'health:pass' : 'health:fail';
@@ -159,6 +163,7 @@ class HealthChecker {
       command: c.command,
       interval: c.interval,
       lastResult: c.lastResult,
+      history: c.history || [], // historique des 20 derniers résultats (#65)
     }));
   }
 

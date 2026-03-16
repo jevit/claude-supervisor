@@ -282,6 +282,16 @@ const TOOLS = [
     inputSchema: { type: 'object', properties: {} },
   },
   {
+    name: 'supervisor_get_own_output',
+    description: 'Recupere les dernieres lignes de sortie du terminal de cette session (buffer PTY). Utile pour analyser sa propre activite recente.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        last: { type: 'number', description: 'Nombre de caracteres a recuperer (defaut: 2000)', default: 2000 },
+      },
+    },
+  },
+  {
     name: 'supervisor_health_status',
     description: 'Recupere le statut de sante du superviseur et les resultats des health checks.',
     inputSchema: { type: 'object', properties: {} },
@@ -444,6 +454,18 @@ async function handleToolCall(name, args) {
       const notifs = await apiCall('GET', '/api/notifications?unread=true');
       if (!notifs || notifs.length === 0) return 'Aucune notification non lue.';
       return JSON.stringify(notifs, null, 2);
+    }
+
+    case 'supervisor_get_own_output': {
+      // Recuperer le buffer du terminal PTY de cette session (#35)
+      const last = args.last || 2000;
+      try {
+        const data = await apiCall('GET', `/api/terminals/${SESSION_ID}/output?last=${last}`);
+        if (data?.output) return data.output;
+        return 'Aucune sortie disponible (session non reconnue comme terminal PTY).';
+      } catch {
+        return 'Impossible de recuperer la sortie terminal.';
+      }
     }
 
     case 'supervisor_health_status': {

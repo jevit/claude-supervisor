@@ -1,5 +1,9 @@
 {
   "mcpServers": {
+    "supervisor": {
+      "command": "node",
+      "args": ["mcp/supervisor-mcp.js"]
+    },
     "claude-supervisor": {
       "command": "node",
       "args": ["C:/Perso/Workspace3/claude-supervisor/mcp/supervisor-mcp.js"],

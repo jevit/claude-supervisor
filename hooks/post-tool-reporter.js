@@ -45,9 +45,10 @@ async function processHook(raw) {
     // Pas de JSON valide, on utilise les variables d'env
   }
 
-  const toolName = hookData.tool_name || process.env.CLAUDE_TOOL_NAME || 'unknown';
-  const sessionId = hookData.session_id || process.env.CLAUDE_SESSION_ID || null;
+  const toolName   = hookData.tool_name  || process.env.CLAUDE_TOOL_NAME  || 'unknown';
+  const sessionId  = hookData.session_id || process.env.CLAUDE_SESSION_ID || null;
   const projectDir = hookData.project_dir || process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  const isError    = hookData.tool_response?.is_error === true || hookData.is_error === true;
 
   // Extraire un resume de l'action depuis l'input de l'outil
   let actionSummary = toolName;
@@ -78,15 +79,32 @@ async function processHook(raw) {
     action: actionSummary,
     directory: projectDir,
     tool: toolName,
+    isError,
     timestamp: new Date().toISOString(),
   });
+
+  // Tracker les invocations d'agents subagents
+  if (toolName === 'Agent') {
+    try {
+      const input = hookData.tool_input || process.env.CLAUDE_TOOL_INPUT;
+      const parsed = typeof input === 'string' ? JSON.parse(input) : (input || {});
+      const agentType = parsed.subagent_type || 'general-purpose';
+      const description = parsed.description || '';
+      await apiCall('PUT', `/api/sessions/${supervisorSessionId}/agents`, {
+        agentType,
+        description,
+      });
+    } catch {
+      // Silencieux si parsing echoue
+    }
+  }
 }
 
 /**
  * Genere un ID stable a partir du directory (meme session = meme ID)
  */
 function stableId(dir) {
-  return crypto.createHash('md5').update(dir).digest('hex').substring(0, 12);
+  return crypto.createHash('sha256').update(dir).digest('hex').substring(0, 12);
 }
 
 function apiCall(method, urlPath, body = null) {

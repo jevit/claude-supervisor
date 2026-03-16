@@ -43,6 +43,7 @@ class TerminalTracker {
       history: [],
       taskQueue: [],
       gitStatus: null,
+      usedAgents: {}, // { agentType: { count, lastUsedAt, calls: [{description, timestamp}] } }
       lastUpdate: new Date().toISOString(),
       startedAt: new Date().toISOString(),
     };
@@ -103,6 +104,36 @@ class TerminalTracker {
   }
 
   /**
+   * Enregistre l'invocation d'un agent subagent par une session.
+   */
+  addAgentInvocation(sessionId, agentType, description) {
+    const session = this.sessions.get(sessionId);
+    if (!session) return null;
+    if (!session.usedAgents) session.usedAgents = {};
+
+    const now = new Date().toISOString();
+    const entry = session.usedAgents[agentType] || { count: 0, lastUsedAt: null, calls: [] };
+    entry.count += 1;
+    entry.lastUsedAt = now;
+    entry.calls.push({ description: description || '', timestamp: now });
+    // Garder les 50 derniers appels par type
+    if (entry.calls.length > 50) entry.calls.shift();
+    session.usedAgents[agentType] = entry;
+    session.lastUpdate = now;
+
+    this._persist();
+    this.broadcast('agent:invoked', {
+      sessionId,
+      agentType,
+      description: description || '',
+      count: entry.count,
+      timestamp: now,
+    });
+    this.broadcast('session:updated', this._normalize(session));
+    return entry;
+  }
+
+  /**
    * Met a jour le statut git d'une session.
    */
   setGitStatus(sessionId, gitStatus) {
@@ -140,6 +171,7 @@ class TerminalTracker {
       recentActions: session.history.slice(-5),
       taskQueue: session.taskQueue || [],
       gitStatus: session.gitStatus || null,
+      usedAgents: session.usedAgents || {},
     };
   }
 

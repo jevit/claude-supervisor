@@ -107,7 +107,7 @@ router.put('/:id/heartbeat', (req, res) => {
   const tracker   = req.app.locals.tracker;
   const broadcast = req.app.locals.broadcast;
   const sessionId = req.params.id;
-  const { action, directory, tool, timestamp } = req.body;
+  const { action, directory, tool, timestamp, isError } = req.body;
 
   // Verifier si la session existe
   let session = tracker.getSession(sessionId);
@@ -124,6 +124,7 @@ router.put('/:id/heartbeat', (req, res) => {
   // Mettre a jour la session (status actif + action eventuelle)
   const update = { status: 'active' };
   if (action) update.action = action;
+  if (isError) update.lastToolError = { tool, action, timestamp: timestamp || new Date().toISOString() }; // #34
 
   const updated = tracker.updateSession(sessionId, update);
 
@@ -178,6 +179,16 @@ router.post('/:id/inject', (req, res) => {
   });
   if (!sent) return res.status(404).json({ error: 'Terminal non connecte' });
   res.json({ sent: true, prompt });
+});
+
+// Enregistrer l'invocation d'un agent subagent pour une session
+router.put('/:id/agents', (req, res) => {
+  const tracker = req.app.locals.tracker;
+  const { agentType, description } = req.body;
+  if (!agentType) return res.status(400).json({ error: 'agentType is required' });
+  const entry = tracker.addAgentInvocation(req.params.id, agentType, description || '');
+  if (!entry) return res.status(404).json({ error: 'Session not found' });
+  res.json(entry);
 });
 
 // Mettre a jour le statut git d'une session (appele par le reporter)

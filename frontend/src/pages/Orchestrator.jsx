@@ -329,6 +329,7 @@ export default function Orchestrator() {
   const navigate  = useNavigate();
   const [squads,    setSquads]    = useState([]);
   const [terminals, setTerminals] = useState([]);
+  const [cliSessions, setCliSessions] = useState([]); // sessions CLI (session-reporter, #11)
   const [conflicts, setConflicts] = useState([]);
   const [outputs,   setOutputs]   = useState({}); // terminalId → raw output string
   const [loading,   setLoading]   = useState(true);
@@ -339,17 +340,26 @@ export default function Orchestrator() {
     if (fetchingRef.current) return;
     fetchingRef.current = true;
     try {
-      const [sq, terms, conf] = await Promise.all([
+      const [sq, terms, conf, sessData] = await Promise.all([
         fetch('/api/squads').then((r) => r.json()),
         fetch('/api/terminals').then((r) => r.json()),
         fetch('/api/conflicts').then((r) => r.json()),
+        fetch('/api/sessions').then((r) => r.json()),
       ]);
+      const ptySessions = new Set(Array.isArray(terms) ? terms.map((t) => t.id) : []);
       setSquads(Array.isArray(sq)    ? sq.filter((s) => s.status === 'running')   : []);
       setTerminals(Array.isArray(terms) ? terms : []);
+      // Sessions CLI = sessions enregistrées via session-reporter mais pas gérées par PTY
+      setCliSessions(Array.isArray(sessData)
+        ? sessData.filter((s) => !ptySessions.has(s.id) && s.status === 'active')
+        : []);
       setConflicts(Array.isArray(conf)  ? conf  : []);
       setLoading(false);
-    } catch {}
-    fetchingRef.current = false;
+    } catch {
+      setLoading(false);
+    } finally {
+      fetchingRef.current = false;
+    }
   }, []);
 
   /* ── Fetch outputs de tous les terminaux running ─────────────── */
@@ -386,12 +396,24 @@ export default function Orchestrator() {
   }, [fetchAll]);
 
   /* ── Fetch outputs toutes les 3s pour les terminaux actifs ───── */
+  // Ref pour éviter la closure périmée dans le timer (runningIds serait figé sinon)
+  const terminalsRef = useRef(terminals);
+  useEffect(() => { terminalsRef.current = terminals; }, [terminals]);
+
+  // Fetch immédiat quand la liste de terminaux change
   useEffect(() => {
     const runningIds = terminals.filter((t) => t.status === 'running').map((t) => t.id);
-    fetchOutputs(runningIds);
-    const t = setInterval(() => fetchOutputs(runningIds), 3000);
-    return () => clearInterval(t);
+    if (runningIds.length) fetchOutputs(runningIds);
   }, [terminals, fetchOutputs]);
+
+  // Timer stable — lit toujours la liste courante via le ref
+  useEffect(() => {
+    const t = setInterval(() => {
+      const runningIds = terminalsRef.current.filter((t) => t.status === 'running').map((t) => t.id);
+      fetchOutputs(runningIds);
+    }, 3000);
+    return () => clearInterval(t);
+  }, [fetchOutputs]);
 
   /* ── WS : refresh sur events pertinents ─────────────────────── */
   useWebSocket(useCallback((event) => {
@@ -417,6 +439,7 @@ export default function Orchestrator() {
           <Kpi value={squads.length}     label="Squads actifs"    color="#8b5cf6" onClick={() => navigate('/squads')} />
           <Kpi value={totalAgents}       label="Agents en cours"  color="#10b981" />
           <Kpi value={standalone.length} label="Terminaux seuls"  color="#3b82f6" onClick={() => navigate('/terminals')} />
+          <Kpi value={cliSessions.length} label="Sessions CLI"  color="#22d3ee" />
           <Kpi value={conflicts.length}  label="Conflits"         color={conflicts.length > 0 ? '#ef4444' : '#64748b'} onClick={() => navigate('/conflicts')} />
         </div>
       </div>
@@ -455,6 +478,26 @@ export default function Orchestrator() {
         </section>
       )}
 
+      {/* ── Sessions CLI (session-reporter, #11) ─────────────────── */}
+      {cliSessions.length > 0 && (
+        <section className="orc-section">
+          <div className="orc-section-title">Sessions CLI ({cliSessions.length})</div>
+          <div className="orc-terms-grid">
+            {cliSessions.map((s) => (
+              <div key={s.id} className="orc-term" style={{ borderLeftColor: '#22d3ee' }}>
+                <div className="orc-term-header">
+                  <span className="orc-term-name">{s.name || s.id.slice(0, 8)}</span>
+                  <span className="orc-term-badge" style={{ background: '#22d3ee' }}>CLI</span>
+                </div>
+                {s.directory && <div style={{ fontSize: 11, color: '#565f89', fontFamily: 'monospace', marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.directory}</div>}
+                {s.currentTask && <p className="orc-term-task">{s.currentTask}</p>}
+                {s.action && <div style={{ fontSize: 11, color: '#a9b1d6', marginTop: 4, fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.action}</div>}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
       {/* ── Conflits ─────────────────────────────────────────────── */}
       {conflicts.length > 0 && (
         <section className="orc-section">
@@ -468,7 +511,7 @@ export default function Orchestrator() {
       )}
 
       {/* ── État vide ────────────────────────────────────────────── */}
-      {squads.length === 0 && standalone.length === 0 && conflicts.length === 0 && (
+      {squads.length === 0 && standalone.length === 0 && cliSessions.length === 0 && conflicts.length === 0 && (
         <div className="card" style={{ textAlign: 'center', padding: 48, color: 'var(--text-secondary)' }}>
           <div style={{ fontSize: 40, marginBottom: 12 }}>🎼</div>
           <div style={{ fontSize: 15, fontWeight: 600 }}>Aucun agent actif</div>

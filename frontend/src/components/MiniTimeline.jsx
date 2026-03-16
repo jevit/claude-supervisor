@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useWebSocket } from '../services/websocket';
 import { Link } from 'react-router-dom';
 
@@ -23,6 +23,18 @@ function eventLabel(type) {
   return parts[parts.length - 1];
 }
 
+function eventDetail(evt) {
+  const d = evt.data || {};
+  if (d.name)      return d.name;
+  if (d.memberName) return d.memberName;
+  if (d.file)      return d.file.split('/').pop();
+  if (d.key)       return d.key;
+  if (d.from && d.to) return `${d.from.substring(0,6)}→${d.to.substring(0,6)}`;
+  if (d.sessionId) return d.sessionId.substring(0, 8);
+  if (d.terminalId) return d.terminalId.substring(0, 8);
+  return null;
+}
+
 export default function MiniTimeline() {
   const [events, setEvents] = useState([]);
 
@@ -35,8 +47,16 @@ export default function MiniTimeline() {
 
   useEffect(() => { fetchEvents(); }, [fetchEvents]);
 
+  // Nettoyage du timer debounce au démontage
+  const debounceRef = useRef(null);
+  useEffect(() => () => clearTimeout(debounceRef.current), []);
+
   useWebSocket(useCallback((event) => {
-    if (event !== 'init' && event !== 'notification:new') fetchEvents();
+    // Debounce 500ms pour éviter le flood sur terminal:output
+    if (event !== 'init' && event !== 'notification:new') {
+      clearTimeout(debounceRef.current);
+      debounceRef.current = setTimeout(fetchEvents, 500);
+    }
   }, [fetchEvents]));
 
   return (
@@ -48,15 +68,21 @@ export default function MiniTimeline() {
       {events.length === 0 ? (
         <p className="mini-empty">Aucune activite</p>
       ) : (
-        events.map((evt) => (
-          <div key={evt.id} className="mini-event">
-            <div className="mini-dot" style={{ background: EVENT_COLORS[evt.type] || 'var(--text-secondary)' }} />
-            <div className="mini-content">
-              <span className="mini-type">{eventLabel(evt.type)}</span>
-              <span className="mini-time">{formatTime(evt.timestamp)}</span>
+        events.map((evt) => {
+          const detail = eventDetail(evt);
+          return (
+            <div key={evt.id} className="mini-event">
+              <div className="mini-dot" style={{ background: EVENT_COLORS[evt.type] || 'var(--text-secondary)' }} />
+              <div className="mini-content">
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
+                  <span className="mini-type">{eventLabel(evt.type)}</span>
+                  {detail && <span className="mini-detail">{detail}</span>}
+                </div>
+                <span className="mini-time">{formatTime(evt.timestamp)}</span>
+              </div>
             </div>
-          </div>
-        ))
+          );
+        })
       )}
       <style>{`
         .mini-timeline {
@@ -98,7 +124,8 @@ export default function MiniTimeline() {
           flex: 1;
         }
         .mini-type { font-size: 12px; color: var(--text-primary); text-transform: capitalize; }
-        .mini-time { font-size: 11px; color: var(--text-secondary); }
+        .mini-detail { font-size: 10px; color: var(--text-secondary); font-family: monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 110px; }
+        .mini-time { font-size: 11px; color: var(--text-secondary); flex-shrink: 0; }
       `}</style>
     </div>
   );
