@@ -25,5 +25,13 @@
         ]
       }
     ]
-  }
+  },
+  "maxTerminals": 5,
+  "heartbeatInterval": 5000,
+  "maxEvents": 100,
+  "worktreeBase": "C:\\Perso\\Workspace3\\claude-supervisor",
+  "dangerousModeDefault": true,
+  "showConflicts": false,
+  "showAnalytics": false,
+  "showJournal": false
 }
