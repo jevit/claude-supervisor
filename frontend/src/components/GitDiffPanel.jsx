@@ -108,7 +108,7 @@ export function fileStatusLetter(f) {
 
 /* ── Composant arbre de fichiers ─────────────────────────────────── */
 function FileTreeNode({ name, node, selectedFile, onSelect, depth = 0, fileActionProps }) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
   const hasFiles = node.files.length > 0;
   const indent   = depth * 12;
 

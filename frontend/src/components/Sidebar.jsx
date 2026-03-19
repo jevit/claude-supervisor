@@ -8,6 +8,7 @@ const CORE_ITEMS = [
   { to: '/terminals',    label: 'Terminaux',        icon: '🖥', shortcut: 'Alt+1' },
   { to: '/context',      label: 'Contexte Partagé', icon: '📋', shortcut: 'Alt+3' },
   { to: '/squads',       label: 'Squad Mode',       icon: '👥', shortcut: 'Alt+5' },
+  { to: '/agents',       label: 'Agents',            icon: '🤖', shortcut: '' },
   { to: '/messages',     label: 'Messages',         icon: '✉',  shortcut: '' },
   { to: '/settings',     label: 'Paramètres',       icon: '⚙', shortcut: '' },
 ];

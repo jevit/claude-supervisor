@@ -36,6 +36,8 @@ const conflictRoutes = require('./routes/conflicts');
 const contextRoutes = require('./routes/context');
 const envRoutes = require('./routes/env');
 const gitRoutes = require('./routes/git');
+const agentRoutes = require('./routes/agents');
+const claudeConfigRoutes = require('./routes/claude-config');
 
 // Charger settings.json AVANT de configurer le serveur
 let settings = {};
@@ -181,6 +183,8 @@ app.use('/api/git', gitRoutes);
 app.use('/api/terminals', terminalRoutes);
 app.use('/api/squads', squadRoutes);
 app.use('/api/squad-templates', squadTemplateRoutes);
+app.use('/api/agents', agentRoutes);
+app.use('/api/claude-config', claudeConfigRoutes);
 
 app.get('/api/health', (req, res) => {
   const mem = process.memoryUsage();

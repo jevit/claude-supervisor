@@ -1,5 +1,6 @@
 const express = require('express');
 const fs = require('fs');
+const path = require('path');
 const { runGit, getFullDiff } = require('../services/git-utils');
 const router = express.Router();
 
@@ -24,6 +25,66 @@ router.get('/', (req, res) => {
   const terminalManager = req.app.locals.terminalManager;
   res.json(terminalManager.listTerminals());
 });
+
+// Parcourir le système de fichiers — liste un répertoire ou les lecteurs racine
+router.get('/fs', (req, res) => {
+  const reqPath = req.query.path || '';
+
+  // Sans path : lister les lecteurs disponibles (Windows) ou racine (Unix)
+  if (!reqPath) {
+    if (process.platform === 'win32') {
+      const drives = [];
+      for (const letter of 'CDEFGHIJKLMNOPQRSTUVWXYZ') {
+        const p = `${letter}:\\`;
+        try { fs.accessSync(p); drives.push({ name: `${letter}:`, type: 'dir', path: p }); } catch {}
+      }
+      return res.json({ path: '', parent: null, entries: drives });
+    }
+    // Unix : répertoire racine
+    return res.json({ path: '/', parent: null, entries: _listDir('/') });
+  }
+
+  try {
+    const normalized = path.normalize(reqPath);
+    const parent = path.dirname(normalized);
+    res.json({
+      path: normalized,
+      parent: parent !== normalized ? parent : null,
+      entries: _listDir(normalized),
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Lire le contenu d'un fichier (max 200 Ko)
+router.get('/fs/read', (req, res) => {
+  const filePath = req.query.path;
+  if (!filePath) return res.status(400).json({ error: 'path requis' });
+  try {
+    const stat = fs.statSync(filePath);
+    if (!stat.isFile()) return res.status(400).json({ error: 'Ce chemin n\'est pas un fichier' });
+    if (stat.size > 200 * 1024) return res.status(413).json({ error: `Fichier trop volumineux (${Math.round(stat.size / 1024)} Ko > 200 Ko)` });
+    const content = fs.readFileSync(filePath, 'utf-8');
+    res.json({ path: filePath, content, size: stat.size, mtime: stat.mtime });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+function _listDir(dirPath) {
+  return fs.readdirSync(dirPath, { withFileTypes: true })
+    .filter((e) => !e.name.startsWith('.'))
+    .map((e) => ({
+      name: e.name,
+      type: e.isDirectory() ? 'dir' : 'file',
+      path: path.join(dirPath, e.name),
+    }))
+    .sort((a, b) => {
+      if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
+      return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+    });
+}
 
 // Valider un chemin de répertoire (#20)
 router.post('/validate-path', (req, res) => {

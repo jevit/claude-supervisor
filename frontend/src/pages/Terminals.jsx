@@ -6,6 +6,8 @@ import { SearchAddon } from '@xterm/addon-search';
 import 'xterm/css/xterm.css';
 import GitDiffPanel from '../components/GitDiffPanel';
 import ComboBox, { useComboHistory } from '../components/ComboBox';
+import FileBrowser from '../components/FileBrowser';
+import FileExplorer from '../components/FileExplorer';
 import { useWebSocket } from '../services/websocket';
 
 // Supprime les séquences ANSI pour prévisualiser le texte terminal brut
@@ -52,8 +54,17 @@ function fmtRelative(iso) {
  * Panneau de l'onglet Agents — liste les subagents invoqués par la session.
  * agents: [{type, count, lastUsedAt, calls: [{description, timestamp}]}]
  */
+/* Couleur stable par nom d'agent (hue hashé) */
+function agentColor(type) {
+  let h = 0;
+  for (let i = 0; i < type.length; i++) h = (h * 31 + type.charCodeAt(i)) & 0xFFFF;
+  const hue = h % 360;
+  return { bg: `hsla(${hue},60%,55%,0.15)`, border: `hsla(${hue},60%,55%,0.4)`, text: `hsl(${hue},70%,70%)` };
+}
+
 function AgentsPanel({ agents }) {
   const [expanded, setExpanded] = useState({});
+  const [view, setView] = useState('timeline'); // 'timeline' | 'summary'
   const [tick, setTick] = useState(0);
 
   // Rafraîchir les timestamps relatifs toutes les 10s
@@ -63,6 +74,11 @@ function AgentsPanel({ agents }) {
   }, []);
 
   const totalCalls = agents.reduce((s, a) => s + a.count, 0);
+
+  // Tous les appels aplatis et triés par timestamp décroissant
+  const allCalls = agents
+    .flatMap((a) => a.calls.map((c) => ({ ...c, agentType: a.type })))
+    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 
   if (agents.length === 0) {
     return (
@@ -74,79 +90,120 @@ function AgentsPanel({ agents }) {
   }
 
   return (
-    <div style={{ flex: 1, overflowY: 'auto', padding: '10px 14px' }}>
-      {/* En-tête */}
-      <div style={{ marginBottom: 10 }}>
-        <span style={{ fontSize: 11, fontWeight: 700, color: '#565f89', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-          Agents invoqués
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      {/* En-tête avec toggle de vue */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px', borderBottom: '1px solid #2a2b3d', flexShrink: 0 }}>
+        <span style={{ fontSize: 11, color: '#565f89', flex: 1 }}>
+          {totalCalls} appel{totalCalls !== 1 ? 's' : ''} · {agents.length} outil{agents.length !== 1 ? 's' : ''}
         </span>
-        <span style={{ fontSize: 11, color: '#3d4063', marginLeft: 8 }}>
-          {totalCalls} appel{totalCalls !== 1 ? 's' : ''} • {agents.length} type{agents.length !== 1 ? 's' : ''}
-        </span>
+        <div style={{ display: 'flex', border: '1px solid #2a2b3d', borderRadius: 5, overflow: 'hidden' }}>
+          {[{ id: 'timeline', label: '⏱ Flux' }, { id: 'summary', label: '⬡ Résumé' }].map((v) => (
+            <button
+              key={v.id}
+              onClick={() => setView(v.id)}
+              style={{
+                background: view === v.id ? 'rgba(139,92,246,0.2)' : 'none',
+                color: view === v.id ? '#c0caf5' : '#565f89',
+                border: 'none', borderRight: v.id === 'timeline' ? '1px solid #2a2b3d' : 'none',
+                padding: '3px 10px', cursor: 'pointer', fontSize: 11, fontWeight: view === v.id ? 700 : 400,
+              }}
+            >
+              {v.label}
+            </button>
+          ))}
+        </div>
       </div>
 
-      {/* Liste des agents, triés par count décroissant */}
-      {[...agents].sort((a, b) => b.count - a.count).map((agent) => {
-        const isOpen = expanded[agent.type];
-        const proportion = totalCalls > 0 ? agent.count / totalCalls : 0;
-        return (
-          <div key={agent.type} style={{ borderBottom: '1px solid #2a2b3d', paddingBottom: 6, marginBottom: 6 }}>
-            {/* Ligne principale — cliquable pour déplier */}
-            <div
-              role="button"
-              tabIndex={0}
-              onClick={() => setExpanded((p) => ({ ...p, [agent.type]: !p[agent.type] }))}
-              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setExpanded((p) => ({ ...p, [agent.type]: !p[agent.type] })); }}
-              style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', padding: '5px 4px', borderRadius: 4, outline: 'none' }}
-              title={`${agent.type} — ${agent.count} appel${agent.count !== 1 ? 's' : ''}, dernier ${fmtRelative(agent.lastUsedAt)}`}
-            >
-              <span style={{ fontSize: 10, color: '#565f89', width: 10, flexShrink: 0 }}>{isOpen ? '▼' : '▶'}</span>
-              <span style={{ fontFamily: 'monospace', fontSize: 12, color: '#8b5cf6', fontWeight: 600, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {agent.type.length > 24 ? agent.type.substring(0, 24) + '…' : agent.type}
-              </span>
-              {/* Barre de proportion */}
-              <svg width={60} height={6} style={{ flexShrink: 0 }}
-                title={`${agent.type} : ${agent.count} appels sur ${totalCalls} (${Math.round(proportion * 100)}%)`}>
-                <rect x={0} y={0} width={60} height={6} rx={3} fill="#2d3148" />
-                <rect x={0} y={0} width={Math.max(4, Math.round(proportion * 60))} height={6} rx={3} fill="#8b5cf6" />
-              </svg>
-              <span style={{ fontSize: 11, fontVariantNumeric: 'tabular-nums', color: '#a9b1d6', fontWeight: 700, flexShrink: 0, minWidth: 24, textAlign: 'right' }}>
-                ×{agent.count}
-              </span>
-              <span style={{ fontSize: 10, color: '#64748b', flexShrink: 0, minWidth: 60, textAlign: 'right' }}>
-                {fmtRelative(agent.lastUsedAt)}
-              </span>
-            </div>
-            {/* Description de la dernière invocation */}
-            {!isOpen && agent.calls.length > 0 && (
-              <p style={{ margin: '0 0 0 22px', fontSize: 11, color: '#565f89', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {agent.calls[agent.calls.length - 1].description || '—'}
-              </p>
-            )}
-            {/* Historique des appels (déplié) */}
-            {isOpen && (
-              <div style={{ margin: '4px 0 0 22px', maxHeight: 180, overflowY: 'auto' }} role="list">
-                {[...agent.calls].reverse().map((call, i) => (
-                  <div key={i} role="listitem" style={{ display: 'flex', gap: 8, padding: '3px 8px', background: 'rgba(0,0,0,0.2)', borderRadius: 4, marginBottom: 3 }}
-                    title={new Date(call.timestamp).toLocaleString()}>
-                    <span style={{ fontFamily: 'monospace', fontSize: 10, color: '#64748b', flexShrink: 0 }}>
-                      {new Date(call.timestamp).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                    </span>
-                    <span style={{ fontSize: 11, color: '#a9b1d6', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {call.description || '—'}
-                    </span>
-                  </div>
-                ))}
-                {agent.calls.length === 50 && (
-                  <div style={{ fontSize: 10, color: '#3d4063', textAlign: 'center', padding: '4px 0' }}>
-                    50 appels max affichés
+      {/* Vue timeline — appels dans l'ordre chronologique inverse */}
+      {view === 'timeline' && (
+        <div style={{ flex: 1, overflowY: 'auto', padding: '8px 14px', display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {allCalls.map((call, i) => {
+            const c = agentColor(call.agentType);
+            const shortType = call.agentType.length > 18 ? call.agentType.slice(0, 18) + '…' : call.agentType;
+            return (
+              <div key={i} style={{ display: 'flex', alignItems: 'baseline', gap: 8, padding: '4px 8px', borderRadius: 5, background: 'rgba(0,0,0,0.15)' }}>
+                <span style={{ fontSize: 10, color: '#3d4166', fontFamily: 'monospace', flexShrink: 0, minWidth: 52 }}>
+                  {new Date(call.timestamp).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                </span>
+                <span style={{
+                  fontSize: 10, fontWeight: 700, fontFamily: 'monospace', flexShrink: 0,
+                  padding: '1px 6px', borderRadius: 8,
+                  background: c.bg, border: `1px solid ${c.border}`, color: c.text,
+                }}>
+                  {shortType}
+                </span>
+                <span style={{ fontSize: 11, color: '#8892b0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                  {call.description || '—'}
+                </span>
+              </div>
+            );
+          })}
+          {allCalls.length === 0 && (
+            <div style={{ color: '#3d4063', fontSize: 11, textAlign: 'center', marginTop: 20 }}>Aucun appel enregistré</div>
+          )}
+        </div>
+      )}
+
+      {/* Vue résumé — groupé par type (vue originale) */}
+      {view === 'summary' && (
+        <div style={{ flex: 1, overflowY: 'auto', padding: '10px 14px' }}>
+          {[...agents].sort((a, b) => b.count - a.count).map((agent) => {
+            const isOpen = expanded[agent.type];
+            const proportion = totalCalls > 0 ? agent.count / totalCalls : 0;
+            const c = agentColor(agent.type);
+            return (
+              <div key={agent.type} style={{ borderBottom: '1px solid #2a2b3d', paddingBottom: 6, marginBottom: 6 }}>
+                <div
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => setExpanded((p) => ({ ...p, [agent.type]: !p[agent.type] }))}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setExpanded((p) => ({ ...p, [agent.type]: !p[agent.type] })); }}
+                  style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', padding: '5px 4px', borderRadius: 4, outline: 'none' }}
+                >
+                  <span style={{ fontSize: 10, color: '#565f89', width: 10, flexShrink: 0 }}>{isOpen ? '▼' : '▶'}</span>
+                  <span style={{
+                    fontFamily: 'monospace', fontSize: 11, fontWeight: 700, flexShrink: 0,
+                    padding: '1px 7px', borderRadius: 8,
+                    background: c.bg, border: `1px solid ${c.border}`, color: c.text,
+                  }}>
+                    {agent.type.length > 20 ? agent.type.slice(0, 20) + '…' : agent.type}
+                  </span>
+                  <svg width={50} height={5} style={{ flex: 1, maxWidth: 80 }}>
+                    <rect x={0} y={0} width={50} height={5} rx={2} fill="#2d3148" />
+                    <rect x={0} y={0} width={Math.max(3, Math.round(proportion * 50))} height={5} rx={2} fill={c.text} />
+                  </svg>
+                  <span style={{ fontSize: 11, color: '#a9b1d6', fontWeight: 700, flexShrink: 0 }}>×{agent.count}</span>
+                  <span style={{ fontSize: 10, color: '#64748b', flexShrink: 0, minWidth: 55, textAlign: 'right' }}>
+                    {fmtRelative(agent.lastUsedAt)}
+                  </span>
+                </div>
+                {!isOpen && agent.calls.length > 0 && (
+                  <p style={{ margin: '0 0 0 22px', fontSize: 11, color: '#565f89', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {agent.calls[agent.calls.length - 1].description || '—'}
+                  </p>
+                )}
+                {isOpen && (
+                  <div style={{ margin: '4px 0 0 22px', maxHeight: 180, overflowY: 'auto' }}>
+                    {[...agent.calls].reverse().map((call, i) => (
+                      <div key={i} style={{ display: 'flex', gap: 8, padding: '3px 8px', background: 'rgba(0,0,0,0.2)', borderRadius: 4, marginBottom: 3 }}>
+                        <span style={{ fontFamily: 'monospace', fontSize: 10, color: '#64748b', flexShrink: 0 }}>
+                          {new Date(call.timestamp).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                        </span>
+                        <span style={{ fontSize: 11, color: '#a9b1d6', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {call.description || '—'}
+                        </span>
+                      </div>
+                    ))}
+                    {agent.calls.length === 50 && (
+                      <div style={{ fontSize: 10, color: '#3d4063', textAlign: 'center', padding: '4px 0' }}>50 appels max affichés</div>
+                    )}
                   </div>
                 )}
               </div>
-            )}
-          </div>
-        );
-      })}
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -185,9 +242,10 @@ function TerminalView({ terminalId, terminalName, terminalDirectory, terminalSta
 
   const [editing,           setEditing]           = useState(false);
   const [editName,          setEditName]          = useState(terminalName || '');
-  const [activeTab,         setActiveTab]         = useState('terminal'); // 'terminal' | 'diff' | 'agents'
+  const [activeTab,         setActiveTab]         = useState('terminal'); // 'terminal' | 'diff' | 'agents' | 'files'
   const [diffEverOpened,    setDiffEverOpened]    = useState(false);
   const [agentsEverOpened,  setAgentsEverOpened]  = useState(false);
+  const [filesEverOpened,   setFilesEverOpened]   = useState(false);
   const [replaying,         setReplaying]         = useState(false);
   const [diffFileCount,     setDiffFileCount]     = useState(0); // badge sur l'onglet diff
   const [confirmClose,      setConfirmClose]      = useState(false); // confirmation inline (#3)
@@ -209,6 +267,7 @@ function TerminalView({ terminalId, terminalName, terminalDirectory, terminalSta
   const switchTab = (tab) => {
     if (tab === 'diff') setDiffEverOpened(true);
     if (tab === 'agents') setAgentsEverOpened(true);
+    if (tab === 'files') setFilesEverOpened(true);
     setActiveTab(tab);
   };
 
@@ -642,6 +701,9 @@ function TerminalView({ terminalId, terminalName, terminalDirectory, terminalSta
             ...(terminalAgents.length > 0 || agentsEverOpened
               ? [{ id: 'agents', label: compact ? '⬡' : '⬡ Agents', count: terminalAgents.reduce((s, a) => s + a.count, 0) }]
               : []),
+            ...(terminalDirectory
+              ? [{ id: 'files', label: compact ? '🗂' : '🗂 Fichiers' }]
+              : []),
           ].map((tab) => (
             <button key={tab.id} onClick={() => switchTab(tab.id)} style={{
               background: activeTab === tab.id ? 'rgba(139,92,246,0.2)' : 'transparent',
@@ -884,6 +946,12 @@ function TerminalView({ terminalId, terminalName, terminalDirectory, terminalSta
             <AgentsPanel agents={terminalAgents} />
           </div>
         )}
+        {/* Fichiers — explorateur du répertoire de travail */}
+        {filesEverOpened && (
+          <div style={{ position: 'absolute', inset: 0, display: activeTab === 'files' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden', background: '#1a1b26' }}>
+            <FileExplorer directory={terminalDirectory} />
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1024,7 +1092,8 @@ export default function Terminals() {
   const [resumeSessionId, setResumeSessionId] = useState(''); // #83
   const [contextCount, setContextCount]   = useState(0);
   const [showAdvanced, setShowAdvanced]   = useState(false);
-  const [formCollapsed, setFormCollapsed] = useState(() => localStorage.getItem('cs:form-collapsed') === '1');
+  const [showBrowser, setShowBrowser]     = useState(false);
+  const [formCollapsed, setFormCollapsed] = useState(() => localStorage.getItem('cs:form-collapsed') !== '0');
   const [spawnError, setSpawnError]       = useState(null);
   const [templates, setTemplates] = useState(() => {
     try { return JSON.parse(localStorage.getItem('cs:term-templates') || '[]'); } catch { return []; }
@@ -1381,6 +1450,55 @@ export default function Terminals() {
     localStorage.setItem('cs:term-templates', JSON.stringify(next));
   };
 
+  // Lance directement depuis des paramètres sans passer par le formulaire (mode compact)
+  const spawnFromParams = async (params) => {
+    const { directory: dir = '', name: n = '', prompt: p = '', model: m = '', dangerousMode: dm = false, injectContext: ic = true } = params;
+    setSpawnError(null);
+    if (dir.trim()) {
+      try {
+        const check = await fetch('/api/terminals/validate-path', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: dir.trim() }),
+        });
+        const checkData = await check.json();
+        if (!checkData.valid) {
+          setSpawnError(checkData.exists ? "Ce chemin existe mais n'est pas un répertoire" : `Répertoire introuvable : ${dir.trim()}`);
+          return;
+        }
+      } catch {}
+    }
+    try {
+      const res = await fetch('/api/terminals', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          directory:     dir || undefined,
+          name:          n || undefined,
+          prompt:        p || undefined,
+          model:         m || undefined,
+          dangerousMode: dm || undefined,
+          injectContext: ic,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.terminalId) {
+        setSpawnError(data.error || `Erreur ${res.status}`);
+        return;
+      }
+      if (dir.trim()) dirComboHistory.save(dir.trim());
+      if (n.trim()) nameComboHistory.save(n.trim());
+      if (gridMode) {
+        addToGrid(data.terminalId);
+        await fetchTerminals();
+      } else {
+        await fetchTerminals();
+        setActiveTerminal(data.terminalId);
+      }
+    } catch (err) {
+      setSpawnError(err.message || 'Impossible de lancer le terminal');
+    }
+  };
+
   const killTerminal = async (id) => {
     await fetch(`/api/terminals/${id}`, { method: 'DELETE' });
     if (activeTerminal === id) setActiveTerminal(null);
@@ -1605,7 +1723,7 @@ export default function Terminals() {
               style={{ padding: '10px 14px', borderBottom: formCollapsed ? 'none' : '1px solid rgba(45,49,72,0.6)', cursor: 'pointer', userSelect: 'none' }}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-                <span style={{ fontSize: 11, color: '#565f89', transition: 'transform 0.2s', transform: formCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)', display: 'inline-block' }}>▾</span>
+                <span style={{ fontSize: 14, color: '#a78bfa', transition: 'transform 0.2s', transform: formCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)', display: 'inline-block' }}>▾</span>
                 <span style={{ fontSize: 13, fontWeight: 700, color: '#c0caf5' }}>Nouvelle session</span>
                 {!available && (
                   <span style={{ marginLeft: 'auto', fontSize: 10, color: '#ef4444', background: 'rgba(239,68,68,0.1)', padding: '2px 7px', borderRadius: 10, fontWeight: 600 }}>
@@ -1614,6 +1732,69 @@ export default function Terminals() {
                 )}
               </div>
             </div>
+
+            {/* Mode compact — visible quand le formulaire est réduit */}
+            {formCollapsed && (
+              <div style={{ padding: '8px 12px 10px', display: 'flex', flexDirection: 'column', gap: 7 }}>
+                {/* Rejouer dernier répertoire */}
+                {dirComboHistory.history[0] && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ fontSize: 10, color: '#565f89', flexShrink: 0 }}>↺</span>
+                    <span
+                      style={{ flex: 1, fontSize: 11, color: '#8892b0', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                      title={dirComboHistory.history[0]}
+                    >
+                      {dirComboHistory.history[0].replace(/\\/g, '/').split('/').filter(Boolean).pop() || dirComboHistory.history[0]}
+                    </span>
+                    <button
+                      type="button"
+                      disabled={!available}
+                      onClick={() => spawnFromParams({ directory: dirComboHistory.history[0], name: nameComboHistory.history[0] || '' })}
+                      title={`Relancer dans ${dirComboHistory.history[0]}`}
+                      style={{ background: 'rgba(139,92,246,0.15)', border: '1px solid rgba(139,92,246,0.3)', borderRadius: 5, color: '#a78bfa', cursor: available ? 'pointer' : 'not-allowed', fontSize: 11, padding: '3px 9px', fontWeight: 700, flexShrink: 0 }}
+                    >
+                      ▶
+                    </button>
+                  </div>
+                )}
+                {/* Chips templates avec lancement direct */}
+                {templates.length > 0 && (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                    {templates.slice(0, 6).map((tpl) => (
+                      <div
+                        key={tpl.id}
+                        style={{ display: 'flex', alignItems: 'center', background: 'rgba(139,92,246,0.07)', border: '1px solid rgba(139,92,246,0.2)', borderRadius: 10, overflow: 'hidden' }}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => { loadTemplate(tpl); setFormCollapsed(false); localStorage.setItem('cs:form-collapsed', '0'); }}
+                          title={`Éditer : ${tpl.directory}`}
+                          style={{ background: 'none', border: 'none', color: '#8b8fb8', cursor: 'pointer', fontSize: 11, padding: '3px 5px 3px 8px', fontFamily: 'monospace' }}
+                        >
+                          {tpl.label}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={!available}
+                          onClick={() => spawnFromParams(tpl)}
+                          title={`Lancer ${tpl.label} directement`}
+                          style={{ background: 'none', border: 'none', borderLeft: '1px solid rgba(139,92,246,0.2)', color: '#a78bfa', cursor: available ? 'pointer' : 'not-allowed', fontSize: 10, padding: '3px 7px', fontWeight: 700 }}
+                        >
+                          ▶
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {/* Erreur spawn (mode compact) */}
+                {spawnError && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 8px', borderRadius: 5, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)' }}>
+                    <span style={{ color: '#ef4444', fontSize: 11, flex: 1 }}>{spawnError}</span>
+                    <button onClick={() => setSpawnError(null)} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 11, padding: 0 }}>✕</button>
+                  </div>
+                )}
+              </div>
+            )}
 
             {!formCollapsed && <form onSubmit={spawnTerminal} style={{ padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 11 }}>
 
@@ -1647,14 +1828,40 @@ export default function Terminals() {
                 <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#565f89', marginBottom: 5, letterSpacing: '0.3px', textTransform: 'uppercase' }}>
                   📁 Répertoire
                 </label>
-                <ComboBox
-                  value={directory}
-                  onChange={setDirectory}
-                  placeholder="C:/mon-projet"
-                  storageKey="cs:dir-history"
-                  itemIcon="📁"
-                  inputStyle={{ fontFamily: 'monospace', fontSize: 12 }}
-                />
+                <div style={{ display: 'flex', gap: 5 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <ComboBox
+                      value={directory}
+                      onChange={setDirectory}
+                      placeholder="C:/mon-projet"
+                      storageKey="cs:dir-history"
+                      itemIcon="📁"
+                      inputStyle={{ fontFamily: 'monospace', fontSize: 12 }}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowBrowser((v) => !v)}
+                    title="Parcourir les répertoires"
+                    style={{
+                      padding: '0 9px', borderRadius: 6, border: '1px solid rgba(139,92,246,0.3)',
+                      background: showBrowser ? 'rgba(139,92,246,0.2)' : 'rgba(139,92,246,0.08)',
+                      color: showBrowser ? '#a78bfa' : '#565f89',
+                      cursor: 'pointer', fontSize: 14, flexShrink: 0, lineHeight: 1,
+                    }}
+                  >
+                    📂
+                  </button>
+                </div>
+                {showBrowser && (
+                  <div style={{ marginTop: 6 }}>
+                    <FileBrowser
+                      initialPath={directory || ''}
+                      onSelect={(p) => setDirectory(p)}
+                      onClose={() => setShowBrowser(false)}
+                    />
+                  </div>
+                )}
               </div>
 
               {/* Nom — combobox avec historique */}

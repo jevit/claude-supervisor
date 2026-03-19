@@ -10,6 +10,7 @@ import Orchestrator from './pages/Orchestrator';
 import Settings from './pages/Settings';
 import Timeline from './pages/Timeline';
 import Messages from './pages/Messages';
+import Agents from './pages/Agents';
 import Sidebar from './components/Sidebar';
 import { ToastProvider } from './components/Toast';
 
@@ -83,7 +84,7 @@ function GlobalShortcuts({ onShowHelp }) {
 }
 
 export default function App() {
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(true);
   const [showHelp, setShowHelp]   = useState(false);
 
   return (
@@ -105,6 +106,7 @@ export default function App() {
           <Route path="/settings" element={<Settings />} />
           <Route path="/timeline" element={<Timeline />} />
           <Route path="/messages" element={<Messages />} />
+          <Route path="/agents" element={<Agents />} />
         </Routes>
       </main>
     </div>
