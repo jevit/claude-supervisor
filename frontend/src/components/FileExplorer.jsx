@@ -60,7 +60,7 @@ const EXT_LANG = {
   cs: 'cs', cpp: 'cpp', cc: 'cpp', h: 'cpp', hpp: 'cpp',
   kt: 'kt', swift: 'swift', php: 'php', sql: 'sql',
   dockerfile: 'dockerfile',
-  env: 'env', toml: 'env', ini: 'env',
+  env: 'env', toml: 'env', ini: 'env', properties: 'env',
   yaml: 'yaml', yml: 'yaml',
 };
 
@@ -76,7 +76,7 @@ const HLJS_LANG = {
   java: 'java', cs: 'csharp', cpp: 'cpp', cc: 'cpp', h: 'cpp', hpp: 'cpp',
   kt: 'kotlin', swift: 'swift', php: 'php', sql: 'sql',
   dockerfile: 'dockerfile',
-  env: 'ini', toml: 'ini', ini: 'ini',
+  env: 'ini', toml: 'ini', ini: 'ini', properties: 'ini',
   yaml: 'yaml', yml: 'yaml',
   md: 'markdown', mdx: 'markdown',
 };
@@ -140,7 +140,7 @@ function fileIcon(name) {
   if (['php'].includes(ext)) return '🐘';
   if (['sql'].includes(ext)) return '🗄';
   if (['dockerfile'].includes(ext) || name.toLowerCase() === 'dockerfile') return '🐳';
-  if (['env', 'toml', 'yaml', 'yml', 'ini'].includes(ext)) return '🔧';
+  if (['env', 'toml', 'yaml', 'yml', 'ini', 'properties'].includes(ext)) return '🔧';
   if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(ext)) return '🖼';
   if (['pdf'].includes(ext)) return '📕';
   if (['zip', 'tar', 'gz', 'bz2', '7z'].includes(ext)) return '📦';
