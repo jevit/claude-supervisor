@@ -52,28 +52,52 @@ function parseGitStatus(raw) {
   return { files, summary };
 }
 
+/**
+ * Découpe un diff unifié brut en Map<cheminFichier, diffTexte>.
+ * Évite N appels git individuels — on parse la sortie déjà récupérée.
+ */
+function parseDiffByFile(rawDiff) {
+  const result = new Map();
+  if (!rawDiff) return result;
+  // Découpe sur chaque "diff --git" sans perdre la ligne elle-même
+  const sections = rawDiff.split(/\n(?=diff --git )/);
+  for (const section of sections) {
+    if (!section.startsWith('diff --git ')) continue;
+    // Extrait le chemin b/ (chemin après renommage éventuel)
+    const m = section.match(/^diff --git a\/.+ b\/(.+)\n/);
+    if (m) result.set(m[1].replace(/\\/g, '/'), section);
+  }
+  return result;
+}
+
 async function getFullDiff(directory) {
-  const [statusRaw, diffUnstaged, diffStaged] = await Promise.all([
+  // 3 appels parallèles au lieu de 3 + N séquentiels
+  const [statusRaw, diffHead, diffCached] = await Promise.all([
     runGit(['status', '--porcelain'], directory),
-    runGit(['diff'], directory),
+    // diff HEAD couvre staged + unstaged sur les fichiers trackés
+    runGit(['diff', 'HEAD'], directory).catch(() => runGit(['diff'], directory)),
+    // diff --cached seul pour les nouveaux fichiers stagés sans commit précédent
     runGit(['diff', '--cached'], directory),
   ]);
   const { files, summary } = parseGitStatus(statusRaw);
-  const combinedDiff = [diffUnstaged, diffStaged].filter(Boolean).join('\n');
+  const combinedDiff = [diffHead, diffCached].filter(Boolean).join('\n');
 
+  // Assigner les diffs trackés depuis le diff global parsé (0 appel supplémentaire)
+  const diffByFile = parseDiffByFile(combinedDiff);
+  const untrackedFiles = [];
   for (const f of files) {
-    try {
-      if (f.status === 'untracked') {
-        // NUL (Windows) et /dev/null (Unix) pour diff --no-index
-        f.diff = await runGit(['diff', '--no-index', DEV_NULL, f.path], directory).catch(() => '');
-      } else {
-        f.diff = await runGit(['diff', 'HEAD', '--', f.path], directory);
-        if (!f.diff) f.diff = await runGit(['diff', '--cached', '--', f.path], directory);
-      }
-    } catch {
-      f.diff = '';
+    if (f.status === 'untracked') {
+      untrackedFiles.push(f);
+      f.diff = ''; // sera rempli en parallèle ci-dessous
+    } else {
+      f.diff = diffByFile.get(f.path.replace(/\\/g, '/')) || '';
     }
   }
+
+  // Diffs des fichiers non-trackés en parallèle (diff --no-index vers /dev/null)
+  await Promise.all(untrackedFiles.map(async (f) => {
+    f.diff = await runGit(['diff', '--no-index', DEV_NULL, f.path], directory).catch(() => '');
+  }));
 
   let recentCommits = [];
   let currentBranch = '';
@@ -89,4 +113,16 @@ async function getFullDiff(directory) {
   return { files, summary, combinedDiff, recentCommits, currentBranch };
 }
 
-module.exports = { runGit, runGitStrict, parseGitStatus, getFullDiff };
+/**
+ * Diff d'un seul fichier — utilisé pour le lazy-load frontend.
+ */
+async function getFileDiff(directory, filePath, status) {
+  if (status === 'untracked') {
+    return runGit(['diff', '--no-index', DEV_NULL, filePath], directory).catch(() => '');
+  }
+  const diff = await runGit(['diff', 'HEAD', '--', filePath], directory);
+  if (diff) return diff;
+  return runGit(['diff', '--cached', '--', filePath], directory);
+}
+
+module.exports = { runGit, runGitStrict, parseGitStatus, getFullDiff, getFileDiff };

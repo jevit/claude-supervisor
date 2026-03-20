@@ -1,5 +1,5 @@
 const express = require('express');
-const { runGit, runGitStrict, parseGitStatus, getFullDiff } = require('../services/git-utils');
+const { runGit, runGitStrict, parseGitStatus, getFullDiff, getFileDiff } = require('../services/git-utils');
 const router = express.Router();
 
 // Cache du diff git (#53) — invalidé par file:activity via broadcast
@@ -43,6 +43,18 @@ router.post('/diff', async (req, res) => {
     if (err.message?.includes('not a git repository') || err.stderr?.includes('not a git repository')) {
       return res.status(400).json({ error: 'Pas un depot git', directory });
     }
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Diff d'un seul fichier (lazy-load frontend)
+router.post('/file-diff', async (req, res) => {
+  const { directory, filePath, status } = req.body;
+  if (!directory || !filePath) return res.status(400).json({ error: 'directory and filePath required' });
+  try {
+    const diff = await getFileDiff(directory, filePath, status);
+    res.json({ diff });
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });

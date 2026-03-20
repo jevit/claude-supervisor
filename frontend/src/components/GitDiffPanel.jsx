@@ -299,6 +299,8 @@ export default function GitDiffPanel({ directory, terminalId, onClose }) {
   const [confirmDiscard, setConfirmDiscard] = useState(null); // filepath en attente
   const [opError, setOpError]           = useState(null);   // erreur git operation
   const [resolvedDir, setResolvedDir]   = useState(directory); // répertoire résolu (peut venir du terminal)
+  const [fileDiff, setFileDiff]         = useState('');        // diff lazy-loadé pour le fichier sélectionné
+  const [diffLoading, setDiffLoading]   = useState(false);
 
   const showOpError = (msg) => {
     setOpError(msg);
@@ -414,7 +416,30 @@ export default function GitDiffPanel({ directory, terminalId, onClose }) {
   useEffect(() => { fetchDiff(); }, [fetchDiff]);
 
   // Réinitialiser la sélection de fichier lors d'un changement de terminal/répertoire
-  useEffect(() => { setSelectedFile(null); }, [terminalId, directory]);
+  useEffect(() => { setSelectedFile(null); setFileDiff(''); }, [terminalId, directory]);
+
+  // Lazy-load du diff du fichier sélectionné
+  useEffect(() => {
+    if (!selectedFile || selectedFile.startsWith('__commit__') || !resolvedDir) {
+      setFileDiff('');
+      return;
+    }
+    const currentFile = data?.files?.find((f) => f.path === selectedFile);
+    if (!currentFile) return;
+    let cancelled = false;
+    setDiffLoading(true);
+    setFileDiff('');
+    fetch('/api/git/file-diff', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ directory: resolvedDir, filePath: selectedFile, status: currentFile.status }),
+    })
+      .then((r) => r.json())
+      .then((d) => { if (!cancelled) setFileDiff(d.diff || ''); })
+      .catch(() => { if (!cancelled) setFileDiff(''); })
+      .finally(() => { if (!cancelled) setDiffLoading(false); });
+    return () => { cancelled = true; };
+  }, [selectedFile, resolvedDir, data]);
 
   // Ecouter file:activity pour auto-refresh + feed live
   useEffect(() => {
@@ -437,8 +462,7 @@ export default function GitDiffPanel({ directory, terminalId, onClose }) {
   }, [directory, fetchDiff]);
 
   const isCommitRef  = selectedFile?.startsWith('__commit__');
-  const currentFile  = !isCommitRef ? data?.files?.find((f) => f.path === selectedFile) : null;
-  const hunks        = currentFile ? parseDiff(currentFile.diff) : [];
+  const hunks        = parseDiff(fileDiff);
   const sbsRows      = viewMode === 'split' ? buildSideBySide(hunks) : [];
   const fileTree     = data?.files ? buildFileTree(data.files) : null;
 
@@ -754,8 +778,13 @@ export default function GitDiffPanel({ directory, terminalId, onClose }) {
                 </div>
               )}
 
+              {/* Chargement diff fichier */}
+              {selectedFile && !isCommitRef && diffLoading && (
+                <div className="gdp-center"><span className="gdp-loading-spinner" /><span>Chargement du diff…</span></div>
+              )}
+
               {/* Diff unifié */}
-              {selectedFile && !isCommitRef && viewMode === 'unified' && (
+              {selectedFile && !isCommitRef && !diffLoading && viewMode === 'unified' && (
                 hunks.length === 0
                   ? <div className="gdp-center" style={{ color: '#565f89' }}>Pas de diff pour ce fichier</div>
                   : <div className="gdp-diff-content">
@@ -777,7 +806,7 @@ export default function GitDiffPanel({ directory, terminalId, onClose }) {
               )}
 
               {/* Diff côte à côte */}
-              {selectedFile && !isCommitRef && viewMode === 'split' && (
+              {selectedFile && !isCommitRef && !diffLoading && viewMode === 'split' && (
                 sbsRows.length === 0
                   ? <div className="gdp-center" style={{ color: '#565f89' }}>Pas de diff pour ce fichier</div>
                   : <div className="gdp-sbs-root">
