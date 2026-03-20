@@ -2,19 +2,113 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import yaml from 'js-yaml';
+import hljs from 'highlight.js/lib/core';
+import 'highlight.js/styles/atom-one-dark.min.css';
+// Langages enregistrés — tree-shaking : seuls ceux listés sont bundlés
+import langJs       from 'highlight.js/lib/languages/javascript';
+import langTs       from 'highlight.js/lib/languages/typescript';
+import langJson     from 'highlight.js/lib/languages/json';
+import langCss      from 'highlight.js/lib/languages/css';
+import langXml      from 'highlight.js/lib/languages/xml';
+import langBash     from 'highlight.js/lib/languages/bash';
+import langPython   from 'highlight.js/lib/languages/python';
+import langRuby     from 'highlight.js/lib/languages/ruby';
+import langGo       from 'highlight.js/lib/languages/go';
+import langRust     from 'highlight.js/lib/languages/rust';
+import langJava     from 'highlight.js/lib/languages/java';
+import langCsharp   from 'highlight.js/lib/languages/csharp';
+import langCpp      from 'highlight.js/lib/languages/cpp';
+import langYaml     from 'highlight.js/lib/languages/yaml';
+import langMarkdown from 'highlight.js/lib/languages/markdown';
+import langIni      from 'highlight.js/lib/languages/ini';
+import langSql      from 'highlight.js/lib/languages/sql';
+import langPhp      from 'highlight.js/lib/languages/php';
+import langKotlin   from 'highlight.js/lib/languages/kotlin';
+import langSwift    from 'highlight.js/lib/languages/swift';
+import langDockerfile from 'highlight.js/lib/languages/dockerfile';
+hljs.registerLanguage('javascript', langJs);
+hljs.registerLanguage('typescript', langTs);
+hljs.registerLanguage('json',       langJson);
+hljs.registerLanguage('css',        langCss);
+hljs.registerLanguage('xml',        langXml);
+hljs.registerLanguage('bash',       langBash);
+hljs.registerLanguage('python',     langPython);
+hljs.registerLanguage('ruby',       langRuby);
+hljs.registerLanguage('go',         langGo);
+hljs.registerLanguage('rust',       langRust);
+hljs.registerLanguage('java',       langJava);
+hljs.registerLanguage('csharp',     langCsharp);
+hljs.registerLanguage('cpp',        langCpp);
+hljs.registerLanguage('yaml',       langYaml);
+hljs.registerLanguage('markdown',   langMarkdown);
+hljs.registerLanguage('ini',        langIni);
+hljs.registerLanguage('sql',        langSql);
+hljs.registerLanguage('php',        langPhp);
+hljs.registerLanguage('kotlin',     langKotlin);
+hljs.registerLanguage('swift',      langSwift);
+hljs.registerLanguage('dockerfile', langDockerfile);
 
 /* ── Détection du langage à partir de l'extension ─────────────────── */
 const EXT_LANG = {
-  js: 'js', jsx: 'js', ts: 'js', tsx: 'js', mjs: 'js', cjs: 'js',
+  js: 'js', jsx: 'js', ts: 'ts', tsx: 'ts', mjs: 'js', cjs: 'js',
   json: 'json', jsonc: 'json',
   md: 'md', mdx: 'md',
   css: 'css', scss: 'css', less: 'css',
-  html: 'html', htm: 'html', xml: 'html', svg: 'html',
+  html: 'html', htm: 'html', xml: 'xml', svg: 'xml',
   sh: 'sh', bash: 'sh', zsh: 'sh',
-  py: 'py', rb: 'rb', go: 'go', rs: 'rs', java: 'java', cs: 'cs',
+  py: 'py', rb: 'rb', go: 'go', rs: 'rs', java: 'java',
+  cs: 'cs', cpp: 'cpp', cc: 'cpp', h: 'cpp', hpp: 'cpp',
+  kt: 'kt', swift: 'swift', php: 'php', sql: 'sql',
+  dockerfile: 'dockerfile',
   env: 'env', toml: 'env', ini: 'env',
   yaml: 'yaml', yml: 'yaml',
 };
+
+/* ── Mapping ext → identifiant hljs ───────────────────────────────── */
+const HLJS_LANG = {
+  js: 'javascript', jsx: 'javascript', mjs: 'javascript', cjs: 'javascript',
+  ts: 'typescript', tsx: 'typescript',
+  json: 'json', jsonc: 'json',
+  css: 'css', scss: 'css', less: 'css',
+  html: 'xml', htm: 'xml', xml: 'xml', svg: 'xml',
+  sh: 'bash', bash: 'bash', zsh: 'bash',
+  py: 'python', rb: 'ruby', go: 'go', rs: 'rust',
+  java: 'java', cs: 'csharp', cpp: 'cpp', cc: 'cpp', h: 'cpp', hpp: 'cpp',
+  kt: 'kotlin', swift: 'swift', php: 'php', sql: 'sql',
+  dockerfile: 'dockerfile',
+  env: 'ini', toml: 'ini', ini: 'ini',
+  yaml: 'yaml', yml: 'yaml',
+  md: 'markdown', mdx: 'markdown',
+};
+
+/* ── Découpe le HTML colorisé en lignes en fermant/rouvrant les spans ─ */
+function splitHighlightedLines(html) {
+  const lines = [];
+  let current = '';
+  let openSpans = [];
+  let i = 0;
+  while (i < html.length) {
+    if (html[i] === '<') {
+      const end = html.indexOf('>', i);
+      if (end === -1) { current += html.slice(i); break; }
+      const tag = html.slice(i, end + 1);
+      if (tag.startsWith('</')) openSpans.pop();
+      else openSpans.push(tag);
+      current += tag;
+      i = end + 1;
+    } else if (html[i] === '\n') {
+      current += openSpans.map(() => '</span>').join('');
+      lines.push(current);
+      current = openSpans.join('');
+      i++;
+    } else {
+      current += html[i];
+      i++;
+    }
+  }
+  if (current) lines.push(current);
+  return lines;
+}
 
 function extOf(name) {
   const parts = name.split('.');
@@ -28,15 +122,28 @@ function langOf(name) {
 /* ── Icône fichier selon l'extension ─────────────────────────────── */
 function fileIcon(name) {
   const ext = extOf(name);
-  if (['js', 'jsx', 'ts', 'tsx', 'mjs'].includes(ext)) return '🟨';
+  if (['js', 'jsx', 'mjs'].includes(ext)) return '🟨';
+  if (['ts', 'tsx'].includes(ext)) return '🔷';
+  if (['cs'].includes(ext)) return '💜';
+  if (['java', 'kt'].includes(ext)) return '☕';
   if (['json', 'jsonc'].includes(ext)) return '📋';
   if (['md', 'mdx'].includes(ext)) return '📝';
   if (['css', 'scss', 'less'].includes(ext)) return '🎨';
   if (['html', 'htm', 'xml'].includes(ext)) return '🌐';
   if (['sh', 'bash', 'zsh'].includes(ext)) return '⚙';
   if (['py'].includes(ext)) return '🐍';
+  if (['rb'].includes(ext)) return '💎';
+  if (['go'].includes(ext)) return '🐹';
+  if (['rs'].includes(ext)) return '🦀';
+  if (['cpp', 'cc', 'h', 'hpp'].includes(ext)) return '⚡';
+  if (['swift'].includes(ext)) return '🍎';
+  if (['php'].includes(ext)) return '🐘';
+  if (['sql'].includes(ext)) return '🗄';
+  if (['dockerfile'].includes(ext) || name.toLowerCase() === 'dockerfile') return '🐳';
   if (['env', 'toml', 'yaml', 'yml', 'ini'].includes(ext)) return '🔧';
   if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(ext)) return '🖼';
+  if (['pdf'].includes(ext)) return '📕';
+  if (['zip', 'tar', 'gz', 'bz2', '7z'].includes(ext)) return '📦';
   return '📄';
 }
 
@@ -260,6 +367,17 @@ function FileViewer({ filePath }) {
     if (!isMd || !content) return '';
     try { return DOMPurify.sanitize(marked.parse(content)); } catch { return ''; }
   }, [content, isMd]);
+  const highlightedLines = useMemo(() => {
+    if (!content) return [];
+    const lang = HLJS_LANG[ext];
+    if (!lang) return content.split('\n');
+    try {
+      const { value } = hljs.highlight(content, { language: lang, ignoreIllegals: true });
+      return splitHighlightedLines(value);
+    } catch {
+      return content.split('\n');
+    }
+  }, [content, ext]);
 
   if (!filePath) return (
     <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#3d4166', fontSize: 12 }}>
@@ -346,17 +464,16 @@ function FileViewer({ filePath }) {
           <YamlViewer content={content} />
         )}
 
-        {/* Source avec numéros de ligne */}
+        {/* Source avec numéros de ligne et coloration syntaxique */}
         {content !== null && !loading && (!hasRenderedView || !rendered) && (
           <pre style={{
             margin: 0, padding: '10px 0',
             fontSize: 11, lineHeight: 1.6,
             fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
-            color: '#a0a8c0',
-            whiteSpace: 'pre',
-            overflowX: 'auto',
+            color: '#a0a8c0', background: 'transparent',
+            whiteSpace: 'pre', overflowX: 'auto',
           }}>
-            {content.split('\n').map((line, i) => (
+            {highlightedLines.map((line, i) => (
               <div key={i} style={{ display: 'flex', minHeight: '1.6em' }}>
                 <span style={{
                   width: 40, minWidth: 40, textAlign: 'right', paddingRight: 12,
@@ -365,7 +482,11 @@ function FileViewer({ filePath }) {
                 }}>
                   {i + 1}
                 </span>
-                <span style={{ paddingLeft: 12, whiteSpace: 'pre' }}>{line}</span>
+                {typeof line === 'string' && line.includes('<') ? (
+                  <span style={{ paddingLeft: 12, whiteSpace: 'pre' }} dangerouslySetInnerHTML={{ __html: line || '\u200b' }} />
+                ) : (
+                  <span style={{ paddingLeft: 12, whiteSpace: 'pre' }}>{line || '\u200b'}</span>
+                )}
               </div>
             ))}
           </pre>
