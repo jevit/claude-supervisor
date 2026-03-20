@@ -103,7 +103,11 @@ function _listDir(dirPath) {
     }))
     .sort((a, b) => {
       if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
-      return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+      // Les entrées cachées (.) en tête, comme VS Code
+      const aH = a.name.startsWith('.');
+      const bH = b.name.startsWith('.');
+      if (aH !== bH) return aH ? -1 : 1;
+      return a.name.localeCompare(b.name, undefined, { numeric: true, caseFirst: 'lower' });
     });
 }
 
