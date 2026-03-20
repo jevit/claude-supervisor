@@ -1,5 +1,6 @@
 const { execFile } = require('child_process');
 const { promisify } = require('util');
+const path = require('path');
 const os = require('os');
 const execFileAsync = promisify(execFile);
 
@@ -86,6 +87,8 @@ async function getFullDiff(directory) {
   const diffByFile = parseDiffByFile(combinedDiff);
   const untrackedFiles = [];
   for (const f of files) {
+    // Chemin absolu calculé côté backend (évite la reconstruction fragile côté frontend)
+    f.absPath = path.join(directory, f.path);
     if (f.status === 'untracked') {
       untrackedFiles.push(f);
       f.diff = ''; // sera rempli en parallèle ci-dessous

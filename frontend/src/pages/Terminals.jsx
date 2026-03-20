@@ -938,11 +938,9 @@ function TerminalView({ terminalId, terminalName, terminalDirectory, terminalSta
               directory={terminalDirectory}
               onClose={null}
               refreshKey={diffRefreshKey}
-              onOpenFile={(relativePath) => {
-                // Construit le chemin absolu en adaptant le séparateur à l'OS
-                const sep = terminalDirectory?.includes('\\') ? '\\' : '/';
-                const abs = (terminalDirectory || '') + sep + relativePath.replace(/[/\\]/g, sep);
-                setJumpToFile(abs);
+              onOpenFile={(absPath) => {
+                // absPath vient du backend (path.join) — pas de reconstruction côté client
+                setJumpToFile(absPath);
                 switchTab('files');
               }}
             />

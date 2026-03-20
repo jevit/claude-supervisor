@@ -175,7 +175,7 @@ function FileTreeNode({ name, node, selectedFile, onSelect, depth = 0, fileActio
                 }}>{fileName}</span>
                 {fileActionProps?.onOpenFile && (
                   <button
-                    onClick={(e) => { e.stopPropagation(); fileActionProps.onOpenFile(f.path); }}
+                    onClick={(e) => { e.stopPropagation(); fileActionProps.onOpenFile(f.absPath || f.path); }}
                     title="Voir dans l'explorateur de fichiers"
                     style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#565f89', fontSize: 11, padding: '1px 4px', flexShrink: 0 }}
                     onMouseEnter={(e) => { e.currentTarget.style.color = '#a78bfa'; }}
@@ -664,7 +664,7 @@ export default function GitDiffPanel({ directory, terminalId, onClose, onOpenFil
                         <span className="gdp-file-name" style={{ flex: 1 }}>{f.path.split(/[/\\]/).pop()}</span>
                         {onOpenFile && (
                           <button
-                            onClick={(e) => { e.stopPropagation(); onOpenFile(f.path); }}
+                            onClick={(e) => { e.stopPropagation(); onOpenFile(f.absPath || f.path); }}
                             title="Voir dans l'explorateur de fichiers"
                             style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#565f89', fontSize: 11, padding: '1px 4px', flexShrink: 0 }}
                             onMouseEnter={(e) => { e.currentTarget.style.color = '#a78bfa'; }}
