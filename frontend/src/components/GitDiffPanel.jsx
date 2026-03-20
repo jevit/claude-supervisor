@@ -108,7 +108,8 @@ export function fileStatusLetter(f) {
 
 /* ── Composant arbre de fichiers ─────────────────────────────────── */
 function FileTreeNode({ name, node, selectedFile, onSelect, depth = 0, fileActionProps }) {
-  const [open, setOpen] = useState(false);
+  // La racine (name=null) est toujours ouverte ; les sous-dossiers démarrent fermés
+  const [open, setOpen] = useState(!name);
   const hasFiles = node.files.length > 0;
   const indent   = depth * 12;
 
