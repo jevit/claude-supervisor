@@ -368,7 +368,7 @@ class TerminalManager {
         prompt: t.promptOriginal || null,
         model: t.model || null,
         dangerousMode: t.dangerousMode || false,
-        buffer: t.buffer.slice(-20000),
+        buffer: t.buffer.slice(-50000),
         createdAt: t.createdAt,
         exitedAt: t.exitedAt || null,
         status: t.status, // 'running' ou 'exited'/'killed'
@@ -386,7 +386,7 @@ class TerminalManager {
     if (!this.store) return 0;
     const sessions = this.store.get('terminals') || [];
     let count = 0;
-    const MAX_AGE_MS = 7 * 24 * 3600 * 1000; // 7 jours
+    const MAX_AGE_MS = 30 * 24 * 3600 * 1000; // 30 jours
     for (const s of sessions) {
       if (this.terminals.has(s.id)) continue;
       const age = Date.now() - new Date(s.savedAt || s.createdAt).getTime();
@@ -455,6 +455,8 @@ class TerminalManager {
       if (!/^[a-zA-Z0-9._-]+$/.test(ghost.model)) throw new Error('Nom de modele invalide');
       claudeArgs.push('--model', ghost.model);
     }
+    // Reprendre le contexte de la dernière session Claude dans ce répertoire (#resume-ctx)
+    claudeArgs.push('--continue');
     if (effectivePrompt) claudeArgs.push(isWindows ? '%CLAUDE_INITIAL_PROMPT%' : '"$CLAUDE_INITIAL_PROMPT"');
     const shellArgs = isWindows ? ['/k', claudeArgs.join(' ')] : ['-c', claudeArgs.join(' ')];
 
