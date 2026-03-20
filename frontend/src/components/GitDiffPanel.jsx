@@ -294,6 +294,7 @@ export default function GitDiffPanel({ directory, terminalId, onClose, onOpenFil
   const [data, setData]           = useState(null);
   const [selectedFile, setSelectedFile] = useState(null);
   const [activity, setActivity]       = useState([]);
+  const [showActivity, setShowActivity] = useState(() => localStorage.getItem('diff:activity') === 'true');
   const [viewMode, setViewMode]       = useState(() => localStorage.getItem('diff:view')   || 'unified'); // 'unified' | 'split'
   const [fileView, setFileView]       = useState(() => localStorage.getItem('diff:layout') || 'tree');    // 'list' | 'tree'
   const [mainTab, setMainTab]         = useState('diff'); // 'diff' | 'log'
@@ -605,25 +606,30 @@ export default function GitDiffPanel({ directory, terminalId, onClose, onOpenFil
             {/* Colonne gauche : liste + commit panel */}
             <div className="gdp-left-col">
             <div className="gdp-file-list">
-              {/* Feed activité live */}
-              {activity.length > 0 && (
-                <>
-                  <div className="gdp-list-section-title" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#10b981', display: 'inline-block', animation: 'gdp-pulse 1.5s ease-in-out infinite' }} />
-                    Activité live
+              {/* Feed activité live — toggle persisté */}
+              <div className="gdp-list-section-title" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ flex: 1 }}>Activité live {activity.length > 0 && <span style={{ color: '#565f89' }}>({activity.length})</span>}</span>
+                <button
+                  onClick={() => setShowActivity((v) => { const next = !v; localStorage.setItem('diff:activity', next); return next; })}
+                  title={showActivity ? 'Masquer' : 'Afficher'}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 11, color: showActivity ? '#10b981' : '#3d4166', padding: '0 2px' }}
+                >
+                  {showActivity ? '●' : '○'}
+                </button>
+              </div>
+              {showActivity && activity.length > 0 && activity.map((a) => {
+                const fileName = a.filePath ? a.filePath.split(/[/\\]/).pop() : '…';
+                const age = Math.round((Date.now() - new Date(a.ts).getTime()) / 1000);
+                return (
+                  <div key={a.id} className="gdp-activity-item">
+                    <span className="gdp-activity-tool">{TOOL_ICON[a.tool] || '?'}</span>
+                    <span className="gdp-activity-file" title={a.filePath}>{fileName}</span>
+                    <span className="gdp-activity-age">{age < 60 ? `${age}s` : `${Math.round(age / 60)}m`}</span>
                   </div>
-                  {activity.map((a) => {
-                    const fileName = a.filePath ? a.filePath.split(/[/\\]/).pop() : '…';
-                    const age = Math.round((Date.now() - new Date(a.ts).getTime()) / 1000);
-                    return (
-                      <div key={a.id} className="gdp-activity-item">
-                        <span className="gdp-activity-tool">{TOOL_ICON[a.tool] || '?'}</span>
-                        <span className="gdp-activity-file" title={a.filePath}>{fileName}</span>
-                        <span className="gdp-activity-age">{age < 60 ? `${age}s` : `${Math.round(age / 60)}m`}</span>
-                      </div>
-                    );
-                  })}
-                </>
+                );
+              })}
+              {showActivity && activity.length === 0 && (
+                <div style={{ padding: '4px 10px', fontSize: 10, color: '#3d4166', fontStyle: 'italic' }}>En attente d'activité…</div>
               )}
 
               {/* Fichiers modifiés — liste ou arbre */}
