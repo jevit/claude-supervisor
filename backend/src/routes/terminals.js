@@ -86,7 +86,7 @@ router.post('/fs/read', (req, res) => {
     }
     const stat = fs.statSync(normalized);
     if (!stat.isFile()) return res.status(400).json({ error: 'Ce chemin n\'est pas un fichier' });
-    if (stat.size > 200 * 1024) return res.status(413).json({ error: `Fichier trop volumineux (${Math.round(stat.size / 1024)} Ko > 200 Ko)` });
+    if (stat.size > 1024 * 1024) return res.status(413).json({ error: `Fichier trop volumineux (${Math.round(stat.size / 1024)} Ko > 1 Mo)` });
     const content = fs.readFileSync(normalized, 'utf-8');
     res.json({ path: normalized, content, size: stat.size, mtime: stat.mtime });
   } catch (err) {
