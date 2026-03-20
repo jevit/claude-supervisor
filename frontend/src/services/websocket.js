@@ -115,6 +115,14 @@ function _send(type, data) {
  * @param {function} onMessage - Callback (evt, data) pour chaque message reçu
  * @returns {{ connectionState: string, send: function }}
  */
+/**
+ * Envoie l'input d'un terminal via WebSocket (sans overhead HTTP).
+ * Retourne false si le WS n'est pas dispo (le caller peut fallback sur fetch).
+ */
+export function sendTerminalInput(terminalId, data) {
+  return _send('terminal:input', { terminalId, data });
+}
+
 export function useWebSocket(onMessage) {
   const [connectionState, setConnectionState] = useState(_state);
   const onMessageRef = useRef(onMessage);

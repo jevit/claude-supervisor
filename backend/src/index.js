@@ -147,7 +147,7 @@ const squadManager   = new SquadManager(terminalManager, sharedContext, messageB
 const squadTemplates = new SquadTemplates(store);
 
 // Initialiser le protocole WebSocket et câbler la référence pour le filtrage (#54)
-wsProtocol = new WsProtocol(wss, tracker, broadcast, { lockManager, messageBus, approvalRules });
+wsProtocol = new WsProtocol(wss, tracker, broadcast, { lockManager, messageBus, approvalRules, terminalManager });
 
 app.locals.broadcast  = broadcast;
 app.locals.supervisor = supervisor;

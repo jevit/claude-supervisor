@@ -8,7 +8,7 @@ import GitDiffPanel from '../components/GitDiffPanel';
 import ComboBox, { useComboHistory } from '../components/ComboBox';
 import FileBrowser from '../components/FileBrowser';
 import FileExplorer from '../components/FileExplorer';
-import { useWebSocket } from '../services/websocket';
+import { useWebSocket, sendTerminalInput } from '../services/websocket';
 
 // Supprime les séquences ANSI pour prévisualiser le texte terminal brut
 const stripAnsi = (s) => s
@@ -394,13 +394,17 @@ function TerminalView({ terminalId, terminalName, terminalDirectory, terminalSta
       }
     });
 
-    /* ── Saisie utilisateur → backend (desactive en mode ghost) ── */
+    /* ── Saisie utilisateur → backend via WS (fallback fetch) ── */
     if (!isGhost) {
       xterm.onData((data) => {
-        fetch(`/api/terminals/${terminalId}/write`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ data }),
-        }).catch(() => {});
+        // WS = chemin rapide (pas d'overhead HTTP par frappe)
+        if (!sendTerminalInput(terminalId, data)) {
+          // Fallback fetch si le WS est déconnecté
+          fetch(`/api/terminals/${terminalId}/write`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ data }),
+          }).catch(() => {});
+        }
       });
     }
 

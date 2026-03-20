@@ -14,6 +14,7 @@ class WsProtocol {
     this.lockManager = options.lockManager || null;
     this.messageBus = options.messageBus || null;
     this.approvalRules = options.approvalRules || null;
+    this.terminalManager = options.terminalManager || null;
     this.heartbeatTimeout = options.heartbeatTimeout || 30000;
 
     // Map ws -> { type: 'dashboard'|'terminal', sessionId?, heartbeatTimer? }
@@ -88,6 +89,14 @@ class WsProtocol {
         const client = this.clients.get(ws);
         if (client?.subscribedTerminals && data?.terminalId) {
           client.subscribedTerminals.delete(data.terminalId);
+        }
+        break;
+      }
+      // Input terminal via WS — évite les allers-retours HTTP par frappe
+      case 'terminal:input': {
+        const { terminalId, data: inputData } = data || {};
+        if (terminalId && inputData != null && this.terminalManager) {
+          this.terminalManager.write(terminalId, inputData);
         }
         break;
       }
