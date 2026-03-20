@@ -37,12 +37,39 @@ function fileIcon(name) {
   return '📄';
 }
 
+// Normalise un chemin en forward slashes lowercase pour comparaisons
+function normPath(p) { return (p || '').replace(/\\/g, '/').toLowerCase(); }
+
 /* ── Nœud de l'arbre ──────────────────────────────────────────────── */
-function TreeNode({ entry, depth, selectedPath, onSelect, onNavigate }) {
+function TreeNode({ entry, depth, selectedPath, onSelect, jumpToFile }) {
   const [open, setOpen] = useState(depth === 0);
   const [children, setChildren] = useState(null);
   const [loading, setLoading] = useState(false);
   const indent = depth * 14;
+
+  const loadChildren = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/terminals/fs?path=${encodeURIComponent(entry.path)}`);
+      const data = await res.json();
+      setChildren(data.entries || []);
+    } catch {
+      setChildren([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [entry.path]);
+
+  // Auto-expand si le fichier cible est dans ce dossier
+  useEffect(() => {
+    if (!jumpToFile || entry.type !== 'dir') return;
+    const target = normPath(jumpToFile);
+    const self   = normPath(entry.path);
+    if (target.startsWith(self + '/')) {
+      setOpen(true);
+      if (children === null) loadChildren();
+    }
+  }, [jumpToFile, entry.path, entry.type, children, loadChildren]);
 
   const toggle = async () => {
     if (entry.type !== 'dir') {
@@ -51,18 +78,7 @@ function TreeNode({ entry, depth, selectedPath, onSelect, onNavigate }) {
     }
     const next = !open;
     setOpen(next);
-    if (next && children === null) {
-      setLoading(true);
-      try {
-        const res = await fetch(`/api/terminals/fs?path=${encodeURIComponent(entry.path)}`);
-        const data = await res.json();
-        setChildren(data.entries || []);
-      } catch {
-        setChildren([]);
-      } finally {
-        setLoading(false);
-      }
-    }
+    if (next && children === null) await loadChildren();
   };
 
   const isSelected = selectedPath === entry.path;
@@ -107,7 +123,7 @@ function TreeNode({ entry, depth, selectedPath, onSelect, onNavigate }) {
           depth={depth + 1}
           selectedPath={selectedPath}
           onSelect={onSelect}
-          onNavigate={onNavigate}
+          jumpToFile={jumpToFile}
         />
       ))}
     </div>
@@ -265,7 +281,7 @@ function FileViewer({ filePath }) {
 }
 
 /* ── Composant principal ──────────────────────────────────────────── */
-export default function FileExplorer({ directory }) {
+export default function FileExplorer({ directory, jumpToFile }) {
   const [rootEntries, setRootEntries] = useState(null);
   const [selectedFile, setSelectedFile] = useState(null);
   const [loadError, setLoadError] = useState(null);
@@ -284,6 +300,12 @@ export default function FileExplorer({ directory }) {
   }, [directory]);
 
   useEffect(() => { loadRoot(); }, [loadRoot]);
+
+  // Sélectionner et afficher le fichier cible quand on arrive depuis le diff
+  useEffect(() => {
+    if (!jumpToFile) return;
+    setSelectedFile(jumpToFile);
+  }, [jumpToFile]);
 
   if (!directory) return (
     <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#3d4166', fontSize: 12 }}>
@@ -333,6 +355,7 @@ export default function FileExplorer({ directory }) {
               depth={0}
               selectedPath={selectedFile}
               onSelect={(e) => setSelectedFile(e.path)}
+              jumpToFile={jumpToFile}
             />
           ))}
         </div>

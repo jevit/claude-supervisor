@@ -173,6 +173,15 @@ function FileTreeNode({ name, node, selectedFile, onSelect, depth = 0, fileActio
                   fontSize: 11, fontFamily: 'monospace', color: '#c0caf5',
                   flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                 }}>{fileName}</span>
+                {fileActionProps?.onOpenFile && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); fileActionProps.onOpenFile(f.path); }}
+                    title="Voir dans l'explorateur de fichiers"
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#565f89', fontSize: 11, padding: '1px 4px', flexShrink: 0 }}
+                    onMouseEnter={(e) => { e.currentTarget.style.color = '#a78bfa'; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.color = '#565f89'; }}
+                  >↗</button>
+                )}
                 {fileActionProps && (
                   <FileActions file={f} {...fileActionProps} />
                 )}
@@ -279,7 +288,7 @@ function FileActions({ file, directory, onDone, onError, confirmDiscard, onConfi
 }
 
 /* ── Composant principal ─────────────────────────────────────────── */
-export default function GitDiffPanel({ directory, terminalId, onClose }) {
+export default function GitDiffPanel({ directory, terminalId, onClose, onOpenFile }) {
   const [loading, setLoading]     = useState(true);
   const [error, setError]         = useState(null);
   const [data, setData]           = useState(null);
@@ -628,7 +637,7 @@ export default function GitDiffPanel({ directory, terminalId, onClose }) {
                         selectedFile={selectedFile}
                         onSelect={setSelectedFile}
                         depth={0}
-                        fileActionProps={{ directory: resolvedDir, onDone: fetchDiff, onError: showOpError, confirmDiscard, onConfirmDiscard: setConfirmDiscard }}
+                        fileActionProps={{ directory: resolvedDir, onDone: fetchDiff, onError: showOpError, confirmDiscard, onConfirmDiscard: setConfirmDiscard, onOpenFile }}
                       />
                     </>
                   )}
@@ -645,6 +654,15 @@ export default function GitDiffPanel({ directory, terminalId, onClose }) {
                       >
                         <span className="gdp-file-status" style={{ color, background: color + '20' }}>{letter}</span>
                         <span className="gdp-file-name" style={{ flex: 1 }}>{f.path.split(/[/\\]/).pop()}</span>
+                        {onOpenFile && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); onOpenFile(f.path); }}
+                            title="Voir dans l'explorateur de fichiers"
+                            style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#565f89', fontSize: 11, padding: '1px 4px', flexShrink: 0 }}
+                            onMouseEnter={(e) => { e.currentTarget.style.color = '#a78bfa'; }}
+                            onMouseLeave={(e) => { e.currentTarget.style.color = '#565f89'; }}
+                          >↗</button>
+                        )}
                         <FileActions file={f} directory={resolvedDir} onDone={fetchDiff} onError={showOpError}
                           confirmDiscard={confirmDiscard} onConfirmDiscard={setConfirmDiscard} />
                       </div>

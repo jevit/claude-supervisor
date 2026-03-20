@@ -249,6 +249,7 @@ function TerminalView({ terminalId, terminalName, terminalDirectory, terminalSta
   const [replaying,         setReplaying]         = useState(false);
   const [diffFileCount,     setDiffFileCount]     = useState(0); // badge sur l'onglet diff
   const [confirmClose,      setConfirmClose]      = useState(false); // confirmation inline (#3)
+  const [jumpToFile,        setJumpToFile]        = useState(null); // navigation diff → explorateur
 
   // Vérifier le nb de fichiers modifiés pour le badge diff (toutes les 15s)
   useEffect(() => {
@@ -937,7 +938,18 @@ function TerminalView({ terminalId, terminalName, terminalDirectory, terminalSta
         {/* Git Diff — monté au premier clic, puis persistant */}
         {diffEverOpened && (
           <div style={{ position: 'absolute', inset: 0, display: activeTab === 'diff' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
-            <GitDiffPanel terminalId={terminalId} directory={terminalDirectory} onClose={null} />
+            <GitDiffPanel
+              terminalId={terminalId}
+              directory={terminalDirectory}
+              onClose={null}
+              onOpenFile={(relativePath) => {
+                // Construit le chemin absolu en adaptant le séparateur à l'OS
+                const sep = terminalDirectory?.includes('\\') ? '\\' : '/';
+                const abs = (terminalDirectory || '') + sep + relativePath.replace(/[/\\]/g, sep);
+                setJumpToFile(abs);
+                switchTab('files');
+              }}
+            />
           </div>
         )}
         {/* Agents — panneau temps réel */}
@@ -949,7 +961,7 @@ function TerminalView({ terminalId, terminalName, terminalDirectory, terminalSta
         {/* Fichiers — explorateur du répertoire de travail */}
         {filesEverOpened && (
           <div style={{ position: 'absolute', inset: 0, display: activeTab === 'files' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden', background: '#1a1b26' }}>
-            <FileExplorer directory={terminalDirectory} />
+            <FileExplorer directory={terminalDirectory} jumpToFile={jumpToFile} />
           </div>
         )}
       </div>
