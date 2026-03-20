@@ -26,8 +26,22 @@ router.get('/', (req, res) => {
   res.json(terminalManager.listTerminals());
 });
 
+/**
+ * Vérifie qu'un chemin normalisé est dans l'un des répertoires de travail
+ * des terminaux actifs. Protège contre le path traversal.
+ */
+function _isAllowedPath(normalized, terminalManager) {
+  const dirs = (terminalManager?.listTerminals() || [])
+    .map((t) => t.directory)
+    .filter(Boolean)
+    .map((d) => path.normalize(d));
+  const norm = normalized.toLowerCase();
+  return dirs.some((d) => norm.startsWith(d.toLowerCase()));
+}
+
 // Parcourir le système de fichiers — liste un répertoire ou les lecteurs racine
 router.get('/fs', (req, res) => {
+  const terminalManager = req.app.locals.terminalManager;
   const reqPath = req.query.path || '';
 
   // Sans path : lister les lecteurs disponibles (Windows) ou racine (Unix)
@@ -40,12 +54,14 @@ router.get('/fs', (req, res) => {
       }
       return res.json({ path: '', parent: null, entries: drives });
     }
-    // Unix : répertoire racine
     return res.json({ path: '/', parent: null, entries: _listDir('/') });
   }
 
   try {
     const normalized = path.normalize(reqPath);
+    if (!_isAllowedPath(normalized, terminalManager)) {
+      return res.status(403).json({ error: 'Accès refusé : chemin hors répertoires de travail' });
+    }
     const parent = path.dirname(normalized);
     res.json({
       path: normalized,
@@ -59,14 +75,19 @@ router.get('/fs', (req, res) => {
 
 // Lire le contenu d'un fichier (max 200 Ko)
 router.get('/fs/read', (req, res) => {
+  const terminalManager = req.app.locals.terminalManager;
   const filePath = req.query.path;
   if (!filePath) return res.status(400).json({ error: 'path requis' });
   try {
-    const stat = fs.statSync(filePath);
+    const normalized = path.normalize(filePath);
+    if (!_isAllowedPath(normalized, terminalManager)) {
+      return res.status(403).json({ error: 'Accès refusé : chemin hors répertoires de travail' });
+    }
+    const stat = fs.statSync(normalized);
     if (!stat.isFile()) return res.status(400).json({ error: 'Ce chemin n\'est pas un fichier' });
     if (stat.size > 200 * 1024) return res.status(413).json({ error: `Fichier trop volumineux (${Math.round(stat.size / 1024)} Ko > 200 Ko)` });
-    const content = fs.readFileSync(filePath, 'utf-8');
-    res.json({ path: filePath, content, size: stat.size, mtime: stat.mtime });
+    const content = fs.readFileSync(normalized, 'utf-8');
+    res.json({ path: normalized, content, size: stat.size, mtime: stat.mtime });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -74,7 +95,6 @@ router.get('/fs/read', (req, res) => {
 
 function _listDir(dirPath) {
   return fs.readdirSync(dirPath, { withFileTypes: true })
-    .filter((e) => !e.name.startsWith('.'))
     .map((e) => ({
       name: e.name,
       type: e.isDirectory() ? 'dir' : 'file',

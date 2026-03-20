@@ -22,6 +22,10 @@ router.post('/diff', async (req, res) => {
 
   // Si un hash de commit est fourni, retourner le diff de ce commit uniquement
   if (commitHash) {
+    // Valider : SHA hex (4-64 chars) ou ref simple (branches/tags sans args parasites)
+    if (!/^[a-f0-9]{4,64}$/.test(commitHash)) {
+      return res.status(400).json({ error: 'commitHash invalide : SHA hex attendu' });
+    }
     try {
       const commitDiff = await runGit(['show', '--stat', '--patch', commitHash], directory);
       return res.json({ commitDiff });

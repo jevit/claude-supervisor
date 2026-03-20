@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { marked } from 'marked';
+import DOMPurify from 'dompurify';
 
 /* ── Détection du langage à partir de l'extension ─────────────────── */
 const EXT_LANG = {
@@ -168,7 +169,7 @@ function FileViewer({ filePath }) {
   const isMd = ['md', 'mdx'].includes(extOf(fileName));
   const renderedHtml = useMemo(() => {
     if (!isMd || !content) return '';
-    try { return marked.parse(content); } catch { return ''; }
+    try { return DOMPurify.sanitize(marked.parse(content)); } catch { return ''; }
   }, [content, isMd]);
 
   if (!filePath) return (
