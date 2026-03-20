@@ -23,8 +23,8 @@ const _msgSubscribers   = new Set(); // (evt, data) => void
 const _stateSubscribers = new Set(); // (state) => void
 const _pauseSubscribers = new Set(); // (paused: boolean) => void
 
-// État pause — persisté dans localStorage
-let _paused = localStorage.getItem('live-paused') === 'true';
+// État pause — persisté dans localStorage (lecture lazy pour compatibilité SSR/tests)
+let _paused = typeof localStorage !== 'undefined' && localStorage.getItem('live-paused') === 'true';
 
 export function setLivePaused(val) {
   _paused = val;

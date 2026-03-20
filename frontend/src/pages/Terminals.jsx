@@ -21,7 +21,7 @@ const WAITING_PATTERNS = /y\/n|allow\?|proceed\?|continue\?|overwrite\?|confirm|
 
 // Sparkline SVG — 12 buckets × 5s = 60s d'activité rolling
 function Sparkline({ buckets }) {
-  const max = Math.max(...buckets, 1);
+  const max = buckets.reduce((m, v) => (v > m ? v : m), 1);
   return (
     <svg width={48} height={14} style={{ display: 'block', flexShrink: 0 }}>
       {buckets.map((v, i) => {

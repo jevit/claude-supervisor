@@ -74,9 +74,10 @@ router.get('/fs', (req, res) => {
 });
 
 // Lire le contenu d'un fichier (max 200 Ko)
-router.get('/fs/read', (req, res) => {
+// POST pour que le chemin absolu ne soit pas logué dans les access logs HTTP
+router.post('/fs/read', (req, res) => {
   const terminalManager = req.app.locals.terminalManager;
-  const filePath = req.query.path;
+  const filePath = req.body?.path;
   if (!filePath) return res.status(400).json({ error: 'path requis' });
   try {
     const normalized = path.normalize(filePath);

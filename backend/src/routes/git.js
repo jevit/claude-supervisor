@@ -34,7 +34,8 @@ router.post('/diff', async (req, res) => {
     }
   }
   // Vérifier le cache (#53) — ignoré si nocache=true (activation de l'onglet)
-  const cacheKey = `dir:${directory}`;
+  // Clé normalisée : minuscules + slashes pour éviter les doublons Windows (C:\foo vs c:/foo)
+  const cacheKey = `dir:${directory.replace(/\\/g, '/').toLowerCase()}`;
   const cached = diffCache.get(cacheKey);
   if (cached && !req.body.nocache && Date.now() - cached.timestamp < DIFF_CACHE_TTL) {
     return res.json(cached.result);

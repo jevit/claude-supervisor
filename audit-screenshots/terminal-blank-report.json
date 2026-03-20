@@ -1,0 +1,41 @@
+{
+  "results": [
+    {
+      "iter": 1,
+      "t50": "EMPTY_MSG",
+      "t150": "EMPTY_MSG",
+      "t350": "EMPTY_MSG",
+      "t800": "EMPTY_MSG",
+      "t2s": "EMPTY_MSG",
+      "keyChanged": false,
+      "fixedByClick": false,
+      "xterm50Dims": null,
+      "xterm350Dims": null
+    },
+    {
+      "iter": 2,
+      "t50": "EMPTY_MSG",
+      "t150": "EMPTY_MSG",
+      "t350": "EMPTY_MSG",
+      "t800": "BLANK_NO_CANVAS",
+      "t2s": "BLANK_NO_CANVAS",
+      "keyChanged": false,
+      "fixedByClick": false,
+      "xterm50Dims": null,
+      "xterm350Dims": null
+    },
+    {
+      "iter": 3,
+      "t50": "EMPTY_MSG",
+      "t150": "EMPTY_MSG",
+      "t350": "EMPTY_MSG",
+      "t800": "EMPTY_MSG",
+      "t2s": "EMPTY_MSG",
+      "keyChanged": false,
+      "fixedByClick": false,
+      "xterm50Dims": null,
+      "xterm350Dims": null
+    }
+  ],
+  "pageErrors": []
+}

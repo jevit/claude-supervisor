@@ -203,6 +203,7 @@ app.get('/api/health', (req, res) => {
 });
 
 // Purge des données anciennes (#45)
+// NOTE : route admin sans auth — usage local uniquement (ne pas exposer sur réseau public)
 app.post('/api/admin/purge', (req, res) => {
   const { daysTerminals = 7, daysSquads = 30 } = req.body || {};
   const now = Date.now();
@@ -252,6 +253,7 @@ app.get('/api/settings', (req, res) => {
 });
 
 // Mettre à jour les settings depuis l'UI (#25)
+// NOTE : route sans auth — usage local uniquement (ne pas exposer sur réseau public)
 app.put('/api/settings', (req, res) => {
   try {
     const allowed = ['defaultModel', 'maxTerminals', 'heartbeatInterval', 'maxEvents', 'worktreeBase', 'dangerousModeDefault', 'showConflicts', 'showAnalytics', 'showJournal'];

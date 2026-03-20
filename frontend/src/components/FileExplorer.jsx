@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
+import yaml from 'js-yaml';
 
 /* ── Détection du langage à partir de l'extension ─────────────────── */
 const EXT_LANG = {
@@ -11,7 +12,8 @@ const EXT_LANG = {
   html: 'html', htm: 'html', xml: 'html', svg: 'html',
   sh: 'sh', bash: 'sh', zsh: 'sh',
   py: 'py', rb: 'rb', go: 'go', rs: 'rs', java: 'java', cs: 'cs',
-  env: 'env', toml: 'env', yaml: 'env', yml: 'env', ini: 'env',
+  env: 'env', toml: 'env', ini: 'env',
+  yaml: 'yaml', yml: 'yaml',
 };
 
 function extOf(name) {
@@ -131,20 +133,104 @@ function TreeNode({ entry, depth, selectedPath, onSelect, jumpToFile }) {
   );
 }
 
+/* ── Rendu YAML ───────────────────────────────────────────────────── */
+function YamlValue({ value, depth = 0 }) {
+  const [open, setOpen] = useState(depth < 3);
+
+  if (value === null || value === undefined) {
+    return <span style={{ color: '#565f89', fontStyle: 'italic' }}>null</span>;
+  }
+  if (typeof value === 'boolean') {
+    return <span style={{ color: '#ff9e64' }}>{String(value)}</span>;
+  }
+  if (typeof value === 'number') {
+    return <span style={{ color: '#ff9e64' }}>{value}</span>;
+  }
+  if (typeof value === 'string') {
+    return <span style={{ color: '#9ece6a' }}>"{value}"</span>;
+  }
+  if (Array.isArray(value)) {
+    if (value.length === 0) return <span style={{ color: '#565f89' }}>[]</span>;
+    return (
+      <span>
+        <button onClick={() => setOpen((o) => !o)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#7dcfff', padding: 0, fontSize: 11 }}>
+          {open ? '▾' : '▸'} [{value.length}]
+        </button>
+        {open && (
+          <div style={{ paddingLeft: 16, borderLeft: '1px solid rgba(45,49,72,0.6)' }}>
+            {value.map((item, i) => (
+              <div key={i} style={{ display: 'flex', gap: 6, padding: '1px 0' }}>
+                <span style={{ color: '#565f89', flexShrink: 0 }}>{i}:</span>
+                <YamlValue value={item} depth={depth + 1} />
+              </div>
+            ))}
+          </div>
+        )}
+      </span>
+    );
+  }
+  if (typeof value === 'object') {
+    const keys = Object.keys(value);
+    if (keys.length === 0) return <span style={{ color: '#565f89' }}>{'{}'}</span>;
+    return (
+      <span>
+        <button onClick={() => setOpen((o) => !o)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#7dcfff', padding: 0, fontSize: 11 }}>
+          {open ? '▾' : '▸'} {`{${keys.length}}`}
+        </button>
+        {open && (
+          <div style={{ paddingLeft: 16, borderLeft: '1px solid rgba(45,49,72,0.6)' }}>
+            {keys.map((k) => (
+              <div key={k} style={{ display: 'flex', gap: 6, padding: '1px 0', flexWrap: 'wrap' }}>
+                <span style={{ color: '#7aa2f7', flexShrink: 0 }}>{k}:</span>
+                <YamlValue value={value[k]} depth={depth + 1} />
+              </div>
+            ))}
+          </div>
+        )}
+      </span>
+    );
+  }
+  return <span style={{ color: '#a0a8c0' }}>{String(value)}</span>;
+}
+
+function YamlViewer({ content }) {
+  const parsed = useMemo(() => {
+    try {
+      return { data: yaml.load(content), error: null };
+    } catch (err) {
+      return { data: null, error: err.message };
+    }
+  }, [content]);
+
+  if (parsed.error) {
+    return (
+      <div style={{ padding: '12px 16px', fontSize: 11, color: '#ef4444' }}>
+        Erreur YAML : {parsed.error}
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ padding: '12px 16px', fontSize: 12, lineHeight: 1.7, fontFamily: "'JetBrains Mono', 'Fira Code', monospace" }}>
+      <YamlValue value={parsed.data} depth={0} />
+    </div>
+  );
+}
+
 /* ── Visionneur de contenu ────────────────────────────────────────── */
 function FileViewer({ filePath }) {
   const [content, setContent] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [mdRendered, setMdRendered] = useState(true); // mode rendu par défaut pour .md
+  const [rendered, setRendered] = useState(true); // mode rendu par défaut pour .md/.yaml
 
   useEffect(() => {
     if (!filePath) return;
     setLoading(true);
     setContent(null);
     setError(null);
-    fetch(`/api/terminals/fs/read?path=${encodeURIComponent(filePath)}`)
+    fetch('/api/terminals/fs/read', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: filePath }) })
       .then((r) => r.json())
       .then((d) => {
         if (d.error) throw new Error(d.error);
@@ -155,7 +241,7 @@ function FileViewer({ filePath }) {
   }, [filePath]);
 
   // Remettre le mode rendu à chaque changement de fichier
-  useEffect(() => { setMdRendered(true); }, [filePath]);
+  useEffect(() => { setRendered(true); }, [filePath]);
 
   const copy = () => {
     if (!content) return;
@@ -166,7 +252,10 @@ function FileViewer({ filePath }) {
   };
 
   const fileName = filePath ? filePath.replace(/\\/g, '/').split('/').pop() : '';
-  const isMd = ['md', 'mdx'].includes(extOf(fileName));
+  const ext = extOf(fileName);
+  const isMd = ['md', 'mdx'].includes(ext);
+  const isYaml = ['yaml', 'yml'].includes(ext);
+  const hasRenderedView = isMd || isYaml;
   const renderedHtml = useMemo(() => {
     if (!isMd || !content) return '';
     try { return DOMPurify.sanitize(marked.parse(content)); } catch { return ''; }
@@ -190,18 +279,18 @@ function FileViewer({ filePath }) {
         <span style={{ fontSize: 12, fontWeight: 600, color: '#c0caf5', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
           {fileName}
         </span>
-        {/* Toggle source / rendu (MD uniquement) */}
-        {isMd && content && (
+        {/* Toggle source / rendu (MD et YAML) */}
+        {hasRenderedView && content && (
           <div style={{ display: 'flex', border: '1px solid rgba(45,49,72,0.8)', borderRadius: 4, overflow: 'hidden', flexShrink: 0 }}>
-            {[{ id: true, label: '👁 Rendu' }, { id: false, label: '</> Source' }].map((v) => (
+            {[{ id: true, label: isYaml ? '🌿 Arbre' : '👁 Rendu' }, { id: false, label: '</> Source' }].map((v) => (
               <button
                 key={String(v.id)}
-                onClick={() => setMdRendered(v.id)}
+                onClick={() => setRendered(v.id)}
                 style={{
-                  background: mdRendered === v.id ? 'rgba(139,92,246,0.2)' : 'none',
-                  color: mdRendered === v.id ? '#a78bfa' : '#565f89',
+                  background: rendered === v.id ? 'rgba(139,92,246,0.2)' : 'none',
+                  color: rendered === v.id ? '#a78bfa' : '#565f89',
                   border: 'none', padding: '2px 8px', cursor: 'pointer', fontSize: 10,
-                  fontWeight: mdRendered === v.id ? 700 : 400,
+                  fontWeight: rendered === v.id ? 700 : 400,
                   borderRight: v.id === true ? '1px solid rgba(45,49,72,0.8)' : 'none',
                 }}
               >
@@ -238,7 +327,7 @@ function FileViewer({ filePath }) {
         )}
 
         {/* Rendu Markdown */}
-        {content !== null && !loading && isMd && mdRendered && (
+        {content !== null && !loading && isMd && rendered && (
           <div
             dangerouslySetInnerHTML={{ __html: renderedHtml }}
             style={{
@@ -252,8 +341,13 @@ function FileViewer({ filePath }) {
           />
         )}
 
+        {/* Rendu YAML en arbre */}
+        {content !== null && !loading && isYaml && rendered && (
+          <YamlViewer content={content} />
+        )}
+
         {/* Source avec numéros de ligne */}
-        {content !== null && !loading && (!isMd || !mdRendered) && (
+        {content !== null && !loading && (!hasRenderedView || !rendered) && (
           <pre style={{
             margin: 0, padding: '10px 0',
             fontSize: 11, lineHeight: 1.6,

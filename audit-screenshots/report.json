@@ -1,0 +1,82 @@
+[
+  {
+    "page": "/terminals",
+    "screenshot": "C:\\Perso\\Workspace3\\claude-supervisor\\audit-screenshots\\01-terminals.png",
+    "consoleErrors": [],
+    "consoleWarnings": [
+      "⚠️ React Router Future Flag Warning: React Router will begin wrapping state updates in `React.startTransition` in v7. You can use the `v7_startTransition` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_starttransition.",
+      "⚠️ React Router Future Flag Warning: Relative route resolution within Splat routes is changing in v7. You can use the `v7_relativeSplatPath` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_relativesplatpath.",
+      "WebSocket connection to 'ws://localhost:3000/ws' failed: WebSocket is closed before the connection is established."
+    ],
+    "domIssues": []
+  },
+  {
+    "page": "/conflicts",
+    "screenshot": "C:\\Perso\\Workspace3\\claude-supervisor\\audit-screenshots\\02-conflicts.png",
+    "consoleErrors": [],
+    "consoleWarnings": [
+      "⚠️ React Router Future Flag Warning: React Router will begin wrapping state updates in `React.startTransition` in v7. You can use the `v7_startTransition` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_starttransition.",
+      "⚠️ React Router Future Flag Warning: Relative route resolution within Splat routes is changing in v7. You can use the `v7_relativeSplatPath` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_relativesplatpath.",
+      "WebSocket connection to 'ws://localhost:3000/ws' failed: WebSocket is closed before the connection is established."
+    ],
+    "domIssues": []
+  },
+  {
+    "page": "/context",
+    "screenshot": "C:\\Perso\\Workspace3\\claude-supervisor\\audit-screenshots\\03-context.png",
+    "consoleErrors": [],
+    "consoleWarnings": [
+      "⚠️ React Router Future Flag Warning: React Router will begin wrapping state updates in `React.startTransition` in v7. You can use the `v7_startTransition` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_starttransition.",
+      "⚠️ React Router Future Flag Warning: Relative route resolution within Splat routes is changing in v7. You can use the `v7_relativeSplatPath` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_relativesplatpath.",
+      "WebSocket connection to 'ws://localhost:3000/ws' failed: WebSocket is closed before the connection is established."
+    ],
+    "domIssues": []
+  },
+  {
+    "page": "/analytics",
+    "screenshot": "C:\\Perso\\Workspace3\\claude-supervisor\\audit-screenshots\\04-analytics.png",
+    "consoleErrors": [],
+    "consoleWarnings": [
+      "⚠️ React Router Future Flag Warning: React Router will begin wrapping state updates in `React.startTransition` in v7. You can use the `v7_startTransition` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_starttransition.",
+      "⚠️ React Router Future Flag Warning: Relative route resolution within Splat routes is changing in v7. You can use the `v7_relativeSplatPath` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_relativesplatpath.",
+      "WebSocket connection to 'ws://localhost:3000/ws' failed: WebSocket is closed before the connection is established."
+    ],
+    "domIssues": []
+  },
+  {
+    "page": "/squads",
+    "screenshot": "C:\\Perso\\Workspace3\\claude-supervisor\\audit-screenshots\\05-squads.png",
+    "consoleErrors": [],
+    "consoleWarnings": [
+      "⚠️ React Router Future Flag Warning: React Router will begin wrapping state updates in `React.startTransition` in v7. You can use the `v7_startTransition` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_starttransition.",
+      "⚠️ React Router Future Flag Warning: Relative route resolution within Splat routes is changing in v7. You can use the `v7_relativeSplatPath` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_relativesplatpath.",
+      "WebSocket connection to 'ws://localhost:3000/ws' failed: WebSocket is closed before the connection is established."
+    ],
+    "domIssues": []
+  },
+  {
+    "page": "/orchestrator",
+    "screenshot": "C:\\Perso\\Workspace3\\claude-supervisor\\audit-screenshots\\06-orchestrator.png",
+    "consoleErrors": [],
+    "consoleWarnings": [
+      "⚠️ React Router Future Flag Warning: React Router will begin wrapping state updates in `React.startTransition` in v7. You can use the `v7_startTransition` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_starttransition.",
+      "⚠️ React Router Future Flag Warning: Relative route resolution within Splat routes is changing in v7. You can use the `v7_relativeSplatPath` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_relativesplatpath.",
+      "WebSocket connection to 'ws://localhost:3000/ws' failed: WebSocket is closed before the connection is established."
+    ],
+    "domIssues": []
+  },
+  {
+    "page": "/terminals (interactions)",
+    "screenshot": "C:\\Perso\\Workspace3\\claude-supervisor\\audit-screenshots\\07-terminals-form.png",
+    "consoleErrors": [],
+    "consoleWarnings": [
+      "⚠️ React Router Future Flag Warning: React Router will begin wrapping state updates in `React.startTransition` in v7. You can use the `v7_startTransition` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_starttransition.",
+      "⚠️ React Router Future Flag Warning: Relative route resolution within Splat routes is changing in v7. You can use the `v7_relativeSplatPath` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_relativesplatpath.",
+      "WebSocket connection to 'ws://localhost:3000/ws' failed: WebSocket is closed before the connection is established.",
+      "⚠️ React Router Future Flag Warning: React Router will begin wrapping state updates in `React.startTransition` in v7. You can use the `v7_startTransition` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_starttransition.",
+      "⚠️ React Router Future Flag Warning: Relative route resolution within Splat routes is changing in v7. You can use the `v7_relativeSplatPath` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_relativesplatpath.",
+      "WebSocket connection to 'ws://localhost:3000/ws' failed: WebSocket is closed before the connection is established."
+    ],
+    "domIssues": []
+  }
+]
