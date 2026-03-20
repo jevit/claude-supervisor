@@ -363,14 +363,8 @@ function TerminalView({ terminalId, terminalName, terminalDirectory, terminalSta
         return false;
       }
       if (e.ctrlKey && (e.key === 'v' || e.key === 'V')) {
-        if (e.type === 'keydown') {
-          navigator.clipboard.readText().then((text) => {
-            if (text) fetch(`/api/terminals/${terminalId}/write`, {
-              method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ data: text }),
-            }).catch(() => {});
-          }).catch(() => {});
-        }
+        // Ne pas gérer manuellement : le browser envoie un event "paste" qu'xterm
+        // intercepte et transmet via onData → évite le double envoi
         return false;
       }
       if (e.ctrlKey && e.shiftKey && e.key === 'C') {
