@@ -40,6 +40,25 @@ const LAYOUTS = [
   { id: '2x3', cols: 2, rows: 3, label: '2×3', max: 6 },
 ];
 
+// Palette de tag couleurs pour les terminaux
+const TAG_COLORS = ['#ef4444','#f97316','#eab308','#22c55e','#06b6d4','#3b82f6','#8b5cf6','#ec4899','#14b8a6','#f59e0b'];
+
+// Abréviations de modèles Claude pour les badges
+const MODEL_BADGE_MAP = {
+  opus: { label: 'Opus', color: '#f97316' },
+  sonnet: { label: 'Sonnet', color: '#8b5cf6' },
+  haiku: { label: 'Haiku', color: '#06b6d4' },
+};
+function modelBadge(model) {
+  if (!model) return null;
+  const m = model.toLowerCase();
+  for (const [key, val] of Object.entries(MODEL_BADGE_MAP)) {
+    if (m.includes(key)) return val;
+  }
+  // Modèle custom : 8 premiers caractères
+  return { label: model.slice(0, 8), color: '#565f89' };
+}
+
 // Formate un timestamp en temps relatif (ex: "il y a 2min")
 function fmtRelative(iso) {
   if (!iso) return '—';
@@ -251,6 +270,8 @@ function TerminalView({ terminalId, terminalName, terminalDirectory, terminalSta
   const [confirmClose,      setConfirmClose]      = useState(false); // confirmation inline (#3)
   const [jumpToFile,        setJumpToFile]        = useState(null); // navigation diff → explorateur
   const [diffRefreshKey,    setDiffRefreshKey]    = useState(0);    // force re-fetch à l'activation
+  const [quickReplyText,    setQuickReplyText]    = useState('');
+  const quickReplyInputRef = useRef(null);
 
   // Vérifier le nb de fichiers modifiés pour le badge diff (toutes les 15s)
   useEffect(() => {
@@ -934,6 +955,71 @@ function TerminalView({ terminalId, terminalName, terminalDirectory, terminalSta
             Démarrage…
           </div>
         )}
+        {/* Quick-reply — overlay quand le terminal attend une confirmation */}
+        {isWaiting && activeTab === 'terminal' && !isGhost && (
+          <div style={{
+            position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 10,
+            background: 'rgba(26,27,38,0.92)',
+            borderTop: '1px solid rgba(139,92,246,0.4)',
+            display: 'flex', alignItems: 'center', gap: 6,
+            padding: compact ? '4px 8px' : '5px 12px',
+            backdropFilter: 'blur(4px)',
+          }}>
+            <span style={{ fontSize: compact ? 9 : 10, color: '#8b5cf6', fontWeight: 700, flexShrink: 0 }}>⚡</span>
+            {[
+              { label: 'y', value: 'y\n', title: 'Oui' },
+              { label: 'n', value: 'n\n', title: 'Non' },
+              { label: '1', value: '1\n', title: 'Option 1' },
+              { label: '2', value: '2\n', title: 'Option 2' },
+              { label: '↵', value: '\r', title: 'Enter' },
+              { label: '^C', value: '\x03', title: 'Ctrl+C' },
+            ].map((btn) => (
+              <button
+                key={btn.label}
+                title={btn.title}
+                onClick={() => { sendTerminalInput(terminalId, btn.value); containerRef.current?.querySelector('canvas')?.focus(); }}
+                style={{
+                  background: 'rgba(139,92,246,0.15)', border: '1px solid rgba(139,92,246,0.35)',
+                  borderRadius: 4, color: '#c0caf5', padding: compact ? '1px 5px' : '2px 7px',
+                  cursor: 'pointer', fontSize: compact ? 10 : 11, fontWeight: 600,
+                  fontFamily: 'monospace', lineHeight: 1.4, flexShrink: 0,
+                }}
+              >
+                {btn.label}
+              </button>
+            ))}
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!quickReplyText.trim()) return;
+                sendTerminalInput(terminalId, quickReplyText + '\n');
+                setQuickReplyText('');
+              }}
+              style={{ display: 'flex', flex: 1, gap: 4, minWidth: 0 }}
+            >
+              <input
+                ref={quickReplyInputRef}
+                value={quickReplyText}
+                onChange={(e) => setQuickReplyText(e.target.value)}
+                placeholder="Réponse…"
+                style={{
+                  flex: 1, minWidth: 0, background: 'rgba(255,255,255,0.05)',
+                  border: '1px solid rgba(139,92,246,0.3)', borderRadius: 4,
+                  color: '#c0caf5', padding: compact ? '1px 6px' : '2px 8px',
+                  fontSize: compact ? 10 : 11, outline: 'none',
+                }}
+              />
+              <button
+                type="submit"
+                style={{
+                  background: 'rgba(139,92,246,0.2)', border: '1px solid rgba(139,92,246,0.4)',
+                  borderRadius: 4, color: '#8b5cf6', padding: compact ? '1px 6px' : '2px 8px',
+                  cursor: 'pointer', fontSize: compact ? 10 : 11, fontWeight: 700, flexShrink: 0,
+                }}
+              >→</button>
+            </form>
+          </div>
+        )}
         {/* Git Diff — monté au premier clic, puis persistant */}
         {diffEverOpened && (
           <div style={{ position: 'absolute', inset: 0, display: activeTab === 'diff' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
@@ -1024,6 +1110,10 @@ export default function Terminals() {
   const [pinnedIds, setPinnedIds] = useState(() => {
     try { return new Set(JSON.parse(localStorage.getItem('cs:pinned-terminals') || '[]')); } catch { return new Set(); }
   });
+  const [terminalColors, setTerminalColors] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('cs:terminal-colors') || '{}'); } catch { return {}; }
+  });
+  const [colorPickerOpenId, setColorPickerOpenId] = useState(null);
 
   // Conflits + activité sparkline + attente
   const [conflictSet, setConflictSet]         = useState(new Set()); // terminalIds avec fichiers en conflit
@@ -1064,6 +1154,19 @@ export default function Terminals() {
   useEffect(() => {
     localStorage.setItem('cs:pinned-terminals', JSON.stringify([...pinnedIds]));
   }, [pinnedIds]);
+
+  // Persistance couleurs
+  useEffect(() => {
+    localStorage.setItem('cs:terminal-colors', JSON.stringify(terminalColors));
+  }, [terminalColors]);
+
+  // Fermer le color picker au clic en dehors
+  useEffect(() => {
+    if (!colorPickerOpenId) return;
+    const handler = () => setColorPickerOpenId(null);
+    document.addEventListener('click', handler);
+    return () => document.removeEventListener('click', handler);
+  }, [colorPickerOpenId]);
 
   // Ouvrir un terminal via ?open=<id>
   useEffect(() => {
@@ -1314,6 +1417,12 @@ export default function Terminals() {
       next.has(id) ? next.delete(id) : next.add(id);
       return next;
     });
+  };
+
+  const applyTerminalColor = (id, color) => {
+    setTerminalColors((prev) =>
+      color ? { ...prev, [id]: color } : Object.fromEntries(Object.entries(prev).filter(([k]) => k !== id))
+    );
   };
 
   const fetchTerminals = useCallback(async () => {
@@ -2229,12 +2338,14 @@ export default function Terminals() {
                   const silentLabel = silentMs ? (silentMs < 3600000 ? `${Math.floor(silentMs/60000)}min` : `${Math.floor(silentMs/3600000)}h`) : null;
                   // Couleur de branche git + sélection + extras
                   const branchColor  = branchColors[t.id];
+                  const tagColor     = terminalColors[t.id];
                   const isSelected   = selectedIds.has(t.id);
                   const isPinned     = pinnedIds.has(t.id);
                   const hasConflict  = conflictSet.has(t.id);
                   const isWaiting    = waitingSet.has(t.id);
                   const sparkBuckets = activityBuckets[t.id] || Array(12).fill(0);
                   const isKeyFocused = listFocusIdx !== null && filteredTerminals[listFocusIdx]?.id === t.id;
+                  const badge        = modelBadge(t.model);
 
                   return (
                     <div
@@ -2247,7 +2358,7 @@ export default function Terminals() {
                         borderTop:    isSelected ? '2px solid #f59e0b' : isKeyFocused ? '2px solid #a78bfa' : isActive || inGrid ? '2px solid var(--accent)' : '1px solid var(--border)',
                         borderRight:  isSelected ? '2px solid #f59e0b' : isKeyFocused ? '2px solid #a78bfa' : isActive || inGrid ? '2px solid var(--accent)' : '1px solid var(--border)',
                         borderBottom: isSelected ? '2px solid #f59e0b' : isKeyFocused ? '2px solid #a78bfa' : isActive || inGrid ? '2px solid var(--accent)' : '1px solid var(--border)',
-                        borderLeft:   `3px solid ${isWaiting ? '#8b5cf6' : branchColor || statusColor}`,
+                        borderLeft:   `3px solid ${tagColor || (isWaiting ? '#8b5cf6' : branchColor || statusColor)}`,
                         opacity: gridMode && gridTerminals.length >= layout.max && !inGrid ? 0.5 : 1,
                       }}
                       onClick={(e) => { if (!toggleSelect(t.id, e)) handleTerminalClick(t.id); }}
@@ -2292,6 +2403,15 @@ export default function Terminals() {
                           {hasConflict && (
                             <span title="Conflit de fichiers détecté" style={{ fontSize: 11, color: '#f59e0b' }}>⚡</span>
                           )}
+                          {badge && (
+                            <span title={`Modèle : ${t.model}`} style={{
+                              fontSize: 9, padding: '1px 5px', borderRadius: 8,
+                              background: `${badge.color}22`, border: `1px solid ${badge.color}55`,
+                              color: badge.color, fontWeight: 700,
+                            }}>
+                              {badge.label}
+                            </span>
+                          )}
                           <span style={{
                             fontSize: 9, padding: '1px 6px', borderRadius: 8,
                             background: t.status === 'running' ? 'rgba(34,197,94,0.15)' : isGhostT ? 'rgba(245,158,11,0.15)' : 'rgba(239,68,68,0.15)',
@@ -2307,6 +2427,48 @@ export default function Terminals() {
                           >
                             📌
                           </button>
+                          {/* Tag couleur */}
+                          <div style={{ position: 'relative' }}>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); setColorPickerOpenId((prev) => prev === t.id ? null : t.id); }}
+                              title="Tag couleur"
+                              style={{
+                                background: tagColor || 'rgba(255,255,255,0.05)',
+                                border: `1px solid ${tagColor || '#2d3148'}`,
+                                borderRadius: '50%', width: 12, height: 12, cursor: 'pointer', padding: 0, flexShrink: 0,
+                              }}
+                            />
+                            {colorPickerOpenId === t.id && (
+                              <div
+                                onClick={(e) => e.stopPropagation()}
+                                style={{
+                                  position: 'absolute', right: 0, top: 18, zIndex: 50,
+                                  background: '#1a1b26', border: '1px solid #2d3148', borderRadius: 8,
+                                  padding: '6px 8px', display: 'flex', gap: 5, flexWrap: 'wrap', width: 118,
+                                  boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
+                                }}
+                              >
+                                {TAG_COLORS.map((c) => (
+                                  <button
+                                    key={c}
+                                    onClick={() => { applyTerminalColor(t.id, c); setColorPickerOpenId(null); }}
+                                    style={{
+                                      background: c, border: tagColor === c ? '2px solid white' : '2px solid transparent',
+                                      borderRadius: '50%', width: 16, height: 16, cursor: 'pointer', padding: 0, flexShrink: 0,
+                                    }}
+                                  />
+                                ))}
+                                <button
+                                  onClick={() => { applyTerminalColor(t.id, null); setColorPickerOpenId(null); }}
+                                  title="Effacer le tag"
+                                  style={{
+                                    background: 'rgba(255,255,255,0.08)', border: '1px solid #3d4066',
+                                    borderRadius: 4, color: '#565f89', cursor: 'pointer', fontSize: 10, padding: '1px 4px', lineHeight: 1,
+                                  }}
+                                >✕</button>
+                              </div>
+                            )}
+                          </div>
                           {t.status === 'running' && (
                             <button
                               onClick={(e) => { e.stopPropagation(); killTerminal(t.id); }}
