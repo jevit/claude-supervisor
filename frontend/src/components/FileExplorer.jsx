@@ -405,7 +405,7 @@ function EnvViewer({ content }) {
 
 /* ── Nœud de l'arbre ──────────────────────────────────────────────── */
 function TreeNode({ entry, depth, selectedPath, onSelect, jumpToFile }) {
-  const [open, setOpen] = useState(depth === 0);
+  const [open, setOpen] = useState(false);
   const [children, setChildren] = useState(null);
   const [loading, setLoading] = useState(false);
   const indent = depth * 14;
