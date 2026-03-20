@@ -250,6 +250,7 @@ function TerminalView({ terminalId, terminalName, terminalDirectory, terminalSta
   const [diffFileCount,     setDiffFileCount]     = useState(0); // badge sur l'onglet diff
   const [confirmClose,      setConfirmClose]      = useState(false); // confirmation inline (#3)
   const [jumpToFile,        setJumpToFile]        = useState(null); // navigation diff → explorateur
+  const [diffRefreshKey,    setDiffRefreshKey]    = useState(0);    // force re-fetch à l'activation
 
   // Vérifier le nb de fichiers modifiés pour le badge diff (toutes les 15s)
   useEffect(() => {
@@ -266,7 +267,7 @@ function TerminalView({ terminalId, terminalName, terminalDirectory, terminalSta
   }, [terminalId, isGhost]);
 
   const switchTab = (tab) => {
-    if (tab === 'diff') setDiffEverOpened(true);
+    if (tab === 'diff') { setDiffEverOpened(true); setDiffRefreshKey((k) => k + 1); }
     if (tab === 'agents') setAgentsEverOpened(true);
     if (tab === 'files') setFilesEverOpened(true);
     setActiveTab(tab);
@@ -942,6 +943,7 @@ function TerminalView({ terminalId, terminalName, terminalDirectory, terminalSta
               terminalId={terminalId}
               directory={terminalDirectory}
               onClose={null}
+              refreshKey={diffRefreshKey}
               onOpenFile={(relativePath) => {
                 // Construit le chemin absolu en adaptant le séparateur à l'OS
                 const sep = terminalDirectory?.includes('\\') ? '\\' : '/';

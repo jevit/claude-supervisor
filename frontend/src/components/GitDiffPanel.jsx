@@ -288,7 +288,7 @@ function FileActions({ file, directory, onDone, onError, confirmDiscard, onConfi
 }
 
 /* ── Composant principal ─────────────────────────────────────────── */
-export default function GitDiffPanel({ directory, terminalId, onClose, onOpenFile }) {
+export default function GitDiffPanel({ directory, terminalId, onClose, onOpenFile, refreshKey }) {
   const [loading, setLoading]     = useState(true);
   const [error, setError]         = useState(null);
   const [data, setData]           = useState(null);
@@ -320,7 +320,7 @@ export default function GitDiffPanel({ directory, terminalId, onClose, onOpenFil
   // Réinitialiser la confirmation de discard sur clic ailleurs
   const handleRootClick = useCallback(() => setConfirmDiscard(null), []);
 
-  const fetchDiff = useCallback(async () => {
+  const fetchDiff = useCallback(async (nocache = false) => {
     setLoading(true);
     setError(null);
     try {
@@ -330,13 +330,13 @@ export default function GitDiffPanel({ directory, terminalId, onClose, onOpenFil
         if (!res.ok && directory) {
           res = await fetch('/api/git/diff', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ directory }),
+            body: JSON.stringify({ directory, nocache }),
           });
         }
       } else if (directory) {
         res = await fetch('/api/git/diff', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ directory }),
+          body: JSON.stringify({ directory, nocache }),
         });
       } else {
         setError('Aucun répertoire spécifié');
@@ -423,6 +423,8 @@ export default function GitDiffPanel({ directory, terminalId, onClose, onOpenFil
   }, [resolvedDir]);
 
   useEffect(() => { fetchDiff(); }, [fetchDiff]);
+  // Re-fetch (sans cache) quand l'onglet diff est activé depuis Terminals
+  useEffect(() => { if (refreshKey) fetchDiff(true); }, [refreshKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Réinitialiser la sélection de fichier lors d'un changement de terminal/répertoire
   useEffect(() => { setSelectedFile(null); setFileDiff(''); }, [terminalId, directory]);

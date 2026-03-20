@@ -29,10 +29,10 @@ router.post('/diff', async (req, res) => {
       return res.status(500).json({ error: err.message });
     }
   }
-  // Vérifier le cache (#53)
+  // Vérifier le cache (#53) — ignoré si nocache=true (activation de l'onglet)
   const cacheKey = `dir:${directory}`;
   const cached = diffCache.get(cacheKey);
-  if (cached && Date.now() - cached.timestamp < DIFF_CACHE_TTL) {
+  if (cached && !req.body.nocache && Date.now() - cached.timestamp < DIFF_CACHE_TTL) {
     return res.json(cached.result);
   }
   try {
